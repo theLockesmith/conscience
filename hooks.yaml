@@ -65,13 +65,15 @@ hooks:
   # Response validation (rule enforcement) + context extraction + session hygiene + QUALITY ENFORCEMENT
   # Context extraction only runs when context usage > 70% (checked via transcript file size)
   # Quality enforcer BLOCKS half-assed work, deferrals, and missing RAG logging
+  # Block sync runs AFTER quality enforcer to capture any new blocks and persist to RAG
   Stop:
     - commands:
         - "/home/forgemaster/.claude/hooks/quality-enforcer.sh"
         - "/home/forgemaster/.claude/hooks/rule-enforcement-v2.sh"
         - "/home/forgemaster/.claude/hooks/context-extractor.sh"
         - "/home/forgemaster/.claude/hooks/session-hygiene.sh"
-      timeout: 60
+        - "/home/forgemaster/.claude/scripts/sync-blocks-to-rag.sh"
+      timeout: 90
 
   # Pre-compaction extraction - runs BEFORE compaction to save context
   # This is more reliable than Stop hooks which may not fire after compaction
