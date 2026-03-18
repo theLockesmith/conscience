@@ -73,18 +73,23 @@ if echo "$CODE" | grep -qE '(for.*in.*orders|while.*order|batch|bulk)' 2>/dev/nu
     fi
 fi
 
-# Pattern 4: Direct database writes bypassing API
+# Pattern 4: Direct database writes bypassing API (Empire projects only)
+# This rule only applies to Empire projects where database-api-service is the proper code path
+# Coldforge/personal projects (like RAG server) don't have a database-api-service
+CURRENT_DIR=$(pwd)
 if echo "$CODE" | grep -qE '(INSERT INTO|UPDATE.*SET|DELETE FROM)' 2>/dev/null; then
-    if [[ "$FILE_PATH" != *"database-api"* ]] && [[ "$FILE_PATH" != *"migration"* ]]; then
-        REASON="SHORTCUT BLOCKED: Direct database write outside database-api-service. Use the API endpoints."
-        echo "$(date -Iseconds) $REASON" >> "$LOG_FILE"
-        echo "File: $FILE_PATH" >> "$LOG_FILE"
-        echo "---" >> "$LOG_FILE"
-        echo "{\"decision\": \"block\", \"reason\": \"$REASON\"}"
-        exit 0
+    # Only enforce for Empire projects
+    if [[ "$CURRENT_DIR" == *"/empire/"* ]] || [[ "$FILE_PATH" == *"/empire/"* ]]; then
+        if [[ "$FILE_PATH" != *"database-api"* ]] && [[ "$FILE_PATH" != *"migration"* ]]; then
+            REASON="SHORTCUT BLOCKED: Direct database write outside database-api-service. Use the API endpoints."
+            echo "$(date -Iseconds) $REASON" >> "$LOG_FILE"
+            echo "File: $FILE_PATH" >> "$LOG_FILE"
+            echo "---" >> "$LOG_FILE"
+            echo "{\"decision\": \"block\", \"reason\": \"$REASON\"}"
+            exit 0
+        fi
     fi
 fi
-
 # Pattern 5: Creating duplicate functionality
 # Check for patterns that suggest reimplementing existing functions
 EXISTING_FUNCTIONS=(
