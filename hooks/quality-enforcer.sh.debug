@@ -1,0 +1,8 @@
+#!/bin/bash
+# DEBUG wrapper for quality-enforcer
+INPUT=$(cat)
+echo "[$(date -Iseconds)] DEBUG: INPUT_LEN=${#INPUT}" >> ~/.claude/quality-debug.log
+echo "$INPUT" | head -c 500 >> ~/.claude/quality-debug.log
+echo "" >> ~/.claude/quality-debug.log
+echo "---" >> ~/.claude/quality-debug.log
+echo "$INPUT" | /home/forgemaster/.claude/hooks/quality-enforcer.sh

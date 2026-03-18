@@ -1,0 +1,133 @@
+# Critical Rules - Extracted for enforcement
+# These rules are checked against EVERY response via Stop hook
+# Violations BLOCK the response and force regeneration
+
+# Pattern-based rules (fast, regex matching on response text)
+pattern_rules:
+  # NEVER RESTART DOCKER
+  - id: no-docker-restart
+    severity: critical
+    patterns:
+      - "systemctl restart docker"
+      - "service docker restart"
+      - "restart.*docker"
+      - "docker.*restart"
+    message: "BLOCKED: Never restart Docker. This causes production outages."
+
+  # NEVER FORCE DELETE PODS
+  - id: no-force-delete-pods
+    severity: critical
+    patterns:
+      - "kubectl delete.*--force"
+      - "kubectl delete.*--grace-period=0"
+      - "oc delete.*--force"
+      - "force delet.*pod"
+    message: "BLOCKED: Never force delete pods. They're probably just slow, not stuck."
+
+  # NEVER MANUALLY TRIGGER CRONJOBS
+  - id: no-manual-cronjob
+    severity: critical
+    patterns:
+      - "kubectl create job --from=cronjob"
+      - "oc create job --from=cronjob"
+    message: "BLOCKED: Never manually trigger CronJobs unless user explicitly asked."
+
+  # NEVER DECRYPT VAULT
+  - id: no-vault-decrypt
+    severity: critical
+    patterns:
+      - "ansible-vault decrypt"
+      - "ansible-vault view"
+      - "ansible-vault decrypt_string"
+    message: "BLOCKED: Never decrypt Ansible Vault values. Treat them as opaque."
+
+  # NEVER TERMINATE SESSION
+  - id: no-terminate-session
+    severity: critical
+    patterns:
+      - "loginctl terminate-session"
+      - "terminate-session"
+    message: "BLOCKED: Never use loginctl terminate-session. It kills tmux and all terminals."
+
+  # ACTING WITHOUT ASKING
+  - id: no-auto-remediate
+    severity: high
+    patterns:
+      - "I'll go ahead and"
+      - "I'll just"
+      - "Let me quickly"
+      - "I've already"
+      - "I went ahead"
+      - "I took the liberty"
+    message: "WARNING: This sounds like acting without asking. Did the user request this action?"
+
+  # ASSUMING/GUESSING
+  - id: no-assuming
+    severity: high
+    patterns:
+      - "I assume"
+      - "I'm guessing"
+      - "probably just"
+      - "most likely"
+      - "should be fine"
+      - "that's probably"
+    message: "WARNING: Don't assume. Verify or ask the user."
+
+  # HALF-ASSING
+  - id: no-half-assing
+    severity: high
+    patterns:
+      - "good enough"
+      - "close enough"
+      - "should work"
+      - "might work"
+      - "this is the best I can do"
+      - "as a workaround"
+      - "for now"
+      - "quick fix"
+    message: "WARNING: 'Good enough' is never acceptable. Either it works or fix it."
+
+# Behavioral rules (checked via LLM validation)
+behavioral_rules:
+  - id: investigate-dont-remediate
+    description: |
+      When asked to investigate, ONLY investigate and report findings.
+      Do NOT take any remediation actions unless explicitly asked.
+      Check: Does the response propose or take action without being asked?
+
+  - id: ask-dont-assume
+    description: |
+      When uncertain, ASK the user rather than assuming.
+      Check: Does the response make assumptions about what the user wants?
+
+  - id: complete-not-partial
+    description: |
+      Complete tasks thoroughly. Don't deliver partial solutions.
+      Check: Does the response deliver an incomplete solution as if it's done?
+
+  - id: verify-before-declaring
+    description: |
+      Before saying something doesn't exist or isn't possible, search exhaustively.
+      Check: Does the response claim impossibility without thorough verification?
+
+  - id: document-immediately
+    description: |
+      When learning new information, document it immediately.
+      Check: Did the user provide information that should be documented?
+
+# Enforcement settings
+settings:
+  # Block on critical severity
+  block_on_critical: true
+
+  # Warn on high severity (inject reminder, don't block)
+  warn_on_high: true
+
+  # Use LLM validation for behavioral rules
+  llm_validation: true
+
+  # Model for LLM validation (haiku for speed)
+  validation_model: "haiku"
+
+  # Timeout for validation (seconds)
+  validation_timeout: 10

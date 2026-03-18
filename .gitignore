@@ -1,0 +1,37 @@
+# Conscience - Arbiter's integrity layer
+# .gitignore
+
+# Credentials and secrets
+.credentials.json
+*.key
+*.pem
+
+# Large data files (logs, metrics, history)
+*.jsonl
+*.log
+stats-cache.json
+
+# Session-specific state (ephemeral)
+session-env/
+session-state/
+shell-snapshots/
+paste-cache/
+plans/
+todos/
+file-history/
+workflow-state/
+context-threshold-state.json
+
+# Claude Code internal (managed by CLI)
+projects/
+cache/
+debug/
+downloads/
+telemetry/
+statsig/
+plugins/
+settings.json
+settings.local.json
+
+# Pane status (runtime state)
+pane-status/*.status

@@ -1,0 +1,129 @@
+# Custom Slash Commands
+# Define your own /commands with templates
+#
+# Usage in Claude Code:
+#   /mycommand arg1 arg2
+#
+# Variables:
+#   $1, $2, etc. - Positional arguments
+#   $* - All arguments
+#   $PROJECT - Current project name (from cwd)
+#   $FILE - Current file (if in editor context)
+
+commands:
+  # Quick investigation without changes
+  investigate:
+    description: "Investigate an issue without making changes"
+    template: |
+      Investigate this issue: $*
+
+      IMPORTANT: This is investigation only. Do NOT make any changes.
+      Report your findings and wait for direction.
+
+  # Quick test run
+  test:
+    description: "Run tests for current project"
+    template: |
+      Run the tests for this project and report results concisely.
+      If tests fail, summarize the failures but don't fix them yet.
+
+  # Security check
+  seccheck:
+    description: "Run security review on specified files"
+    template: |
+      Use the security agent to scan these files for vulnerabilities: $*
+      Focus on OWASP top 10, hardcoded secrets, and injection risks.
+
+  # Quick explain
+  explain:
+    description: "Explain code without changes"
+    template: |
+      Explain this code or concept: $*
+      Be concise. Don't make any changes.
+
+  # Review recent changes
+  review:
+    description: "Review recent git changes"
+    template: |
+      Review the recent git changes (git diff HEAD~$1 if specified, else HEAD~1).
+      Check for bugs, security issues, and code quality.
+      Use the reviewer agent.
+
+  # Quick refactor suggestion
+  refactor:
+    description: "Suggest refactoring without implementing"
+    template: |
+      Analyze this code for refactoring opportunities: $*
+      Suggest improvements but DON'T implement them.
+      Wait for my approval before making changes.
+
+  # Documentation check
+  docs:
+    description: "Check documentation status"
+    template: |
+      Check the documentation status for: $*
+      - Is README up to date?
+      - Are there missing docstrings?
+      - Is CLAUDE.md current?
+      Report findings only.
+
+  # Health check
+  health:
+    description: "Run codebase health check"
+    template: |
+      Run the codebase health script on the current directory or specified path: $*
+      Summarize the findings.
+
+  # Git status summary
+  status:
+    description: "Summarize git status"
+    template: |
+      Give me a concise summary of:
+      - Current branch and status
+      - Uncommitted changes
+      - Recent commits (last 3)
+
+  # Quick search
+  find:
+    description: "Search codebase for pattern"
+    template: |
+      Search the codebase for: $*
+      Use Grep and Glob to find relevant files.
+      Report locations, don't modify anything.
+
+  # Dependencies check
+  deps:
+    description: "Check dependencies"
+    template: |
+      Analyze the dependencies for this project.
+      Check for outdated packages if possible.
+      Report findings only.
+
+  # Memory recall
+  recall:
+    description: "Search cross-session memory"
+    template: |
+      Search the cross-session memory (decisions and learnings) for: $*
+      Use search_decisions and search_learnings MCP tools.
+
+  # Quick deploy check
+  deploy:
+    description: "Pre-deployment checklist"
+    template: |
+      Run a pre-deployment checklist:
+      1. Check for uncommitted changes
+      2. Run tests
+      3. Check for security issues
+      4. Verify documentation is current
+      Report status for each item.
+
+# Settings for command expansion
+settings:
+  # Prefix for custom commands (default: /)
+  prefix: "/"
+
+  # Whether to show command expansion in output
+  show_expansion: false
+
+  # Default timeout for command execution (seconds)
+  timeout: 300

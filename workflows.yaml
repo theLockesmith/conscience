@@ -1,0 +1,275 @@
+# Agent Workflows - Common patterns for chaining specialized agents
+# Location: ~/.claude/workflows.yaml
+#
+# These workflows define recommended agent sequences for common tasks.
+# Claude should reference these patterns when working on multi-step tasks.
+#
+# Usage: When starting a task that matches a workflow, follow the defined steps.
+
+workflows:
+  # Feature implementation with full quality gates
+  implement_feature:
+    description: "Complete feature implementation with exploration, planning, and review"
+    triggers:
+      - "implement"
+      - "add feature"
+      - "build"
+      - "create new"
+    steps:
+      - name: explore
+        agent: Explore
+        prompt: "Find existing patterns and architecture related to: {feature}"
+        thoroughness: medium
+
+      - name: plan
+        agent: Plan
+        prompt: "Design implementation approach for: {feature}"
+        wait_for_approval: true
+
+      - name: implement
+        action: write_code
+        description: "Implement the feature following the approved plan"
+
+      - name: review
+        agent: reviewer
+        prompt: "Review the implementation for quality and best practices"
+
+      - name: test
+        agent: test-writer
+        prompt: "Generate tests for the new code"
+        condition: "if tests are missing"
+
+  # Bug fix workflow
+  fix_bug:
+    description: "Investigate and fix a bug with proper verification"
+    triggers:
+      - "fix bug"
+      - "debug"
+      - "not working"
+      - "broken"
+    steps:
+      - name: investigate
+        agent: debugger
+        prompt: "Investigate the root cause of: {bug_description}"
+
+      - name: plan_fix
+        action: propose_fix
+        description: "Based on investigation, propose a fix"
+        wait_for_approval: true
+
+      - name: implement_fix
+        action: write_code
+        description: "Implement the fix"
+
+      - name: verify
+        agent: tester
+        prompt: "Run relevant tests to verify the fix"
+
+      - name: review
+        agent: reviewer
+        prompt: "Review the fix for quality and potential regressions"
+
+  # Code refactoring workflow
+  refactor:
+    description: "Safe refactoring with exploration and verification"
+    triggers:
+      - "refactor"
+      - "clean up"
+      - "restructure"
+      - "reorganize"
+    steps:
+      - name: explore
+        agent: Explore
+        prompt: "Map dependencies and usage of: {target}"
+        thoroughness: very_thorough
+
+      - name: plan
+        agent: Plan
+        prompt: "Design refactoring approach for: {target}"
+        wait_for_approval: true
+
+      - name: implement
+        action: write_code
+        description: "Implement refactoring in small, safe steps"
+
+      - name: test
+        agent: tester
+        prompt: "Run tests to verify refactoring didn't break anything"
+
+      - name: review
+        agent: reviewer
+        prompt: "Review refactored code for quality improvements"
+
+  # Security audit workflow
+  security_audit:
+    description: "Comprehensive security review"
+    triggers:
+      - "security audit"
+      - "check security"
+      - "vulnerability scan"
+    steps:
+      - name: scan
+        agent: security
+        prompt: "Scan for security vulnerabilities in: {target}"
+
+      - name: review_secrets
+        action: check_patterns
+        patterns:
+          - "hardcoded credentials"
+          - "API keys"
+          - "private keys"
+          - "passwords"
+
+      - name: report
+        action: document
+        description: "Document findings and recommendations"
+
+  # Test coverage improvement
+  improve_tests:
+    description: "Analyze and improve test coverage"
+    triggers:
+      - "improve tests"
+      - "test coverage"
+      - "more tests"
+    steps:
+      - name: explore
+        agent: Explore
+        prompt: "Find existing tests and coverage for: {target}"
+
+      - name: analyze
+        action: identify_gaps
+        description: "Identify untested code paths"
+
+      - name: write_tests
+        agent: test-writer
+        prompt: "Write tests for uncovered code paths in: {target}"
+
+      - name: verify
+        agent: tester
+        prompt: "Run the new tests and verify they pass"
+
+  # Documentation update workflow
+  update_docs:
+    description: "Update documentation after code changes"
+    triggers:
+      - "update docs"
+      - "document"
+      - "add documentation"
+    steps:
+      - name: explore
+        agent: Explore
+        prompt: "Find existing documentation for: {target}"
+
+      - name: update
+        agent: documenter
+        prompt: "Update documentation to reflect changes in: {target}"
+
+      - name: review
+        action: verify_accuracy
+        description: "Verify documentation matches implementation"
+
+  # Quick investigation (read-only)
+  investigate:
+    description: "Explore and understand without making changes"
+    triggers:
+      - "investigate"
+      - "understand"
+      - "explain"
+      - "how does"
+    steps:
+      - name: explore
+        agent: Explore
+        prompt: "Explore and understand: {target}"
+        thoroughness: very_thorough
+
+      - name: report
+        action: summarize
+        description: "Summarize findings"
+
+# Agent descriptions for reference
+agents:
+  Explore:
+    description: "Fast exploration of codebase structure and patterns"
+    use_for:
+      - Finding files and patterns
+      - Understanding architecture
+      - Mapping dependencies
+    thoroughness_levels:
+      - quick: Basic search
+      - medium: Moderate exploration
+      - very_thorough: Comprehensive analysis
+
+  Plan:
+    description: "Software architect for designing implementations"
+    use_for:
+      - Multi-step implementations
+      - Architectural decisions
+      - Complex refactoring
+    outputs:
+      - Step-by-step plan
+      - Critical files identified
+      - Trade-offs considered
+
+  debugger:
+    description: "Bug investigator and fixer"
+    use_for:
+      - Root cause analysis
+      - Error investigation
+      - Fix implementation
+
+  reviewer:
+    description: "Code quality reviewer"
+    use_for:
+      - Code review
+      - Best practices check
+      - Readability assessment
+
+  security:
+    description: "Security vulnerability scanner"
+    use_for:
+      - OWASP vulnerability check
+      - Secret detection
+      - Security audit
+
+  test-writer:
+    description: "Test generation specialist"
+    use_for:
+      - Unit test generation
+      - Integration test generation
+      - Coverage improvement
+
+  tester:
+    description: "Test runner and reporter"
+    use_for:
+      - Running test suites
+      - Reporting results
+      - Identifying failures
+
+  documenter:
+    description: "Documentation specialist"
+    use_for:
+      - README updates
+      - Code comments
+      - API documentation
+
+# Workflow selection guidance
+guidance:
+  always_explore_first:
+    - "When implementing features in unfamiliar code"
+    - "When refactoring existing code"
+    - "When fixing bugs in complex systems"
+
+  always_plan_first:
+    - "When task requires 3+ steps"
+    - "When multiple approaches are possible"
+    - "When changes affect multiple files"
+
+  always_review_after:
+    - "After implementing features"
+    - "After fixing bugs"
+    - "After refactoring"
+
+  always_test_after:
+    - "After code changes"
+    - "After bug fixes"
+    - "After refactoring"

@@ -1,0 +1,170 @@
+# Claude Code Project Registry
+# Maps project names/aliases to paths, contexts, and commands
+# Used by MCP tools for project switching and context loading
+
+projects:
+  # =============================================================================
+  # Empire Access Projects
+  # =============================================================================
+
+  autism:
+    path: ~/claude/empire/autism
+    context: ~/claude/empire/autism/CLAUDE.md
+    aliases: [openshift, ocp, weaponized-autism]
+    company: empire
+    type: kubernetes
+    kubeconfig: ~/claude/empire/autism/kubeconfig
+    kube_context: autism
+
+  salesforce:
+    path: ~/claude/empire/salesforce
+    context: ~/claude/empire/salesforce/CLAUDE.md
+    aliases: [sf, sfdc]
+    company: empire
+    type: platform
+
+  snowflake:
+    path: ~/claude/empire/snowflake
+    context: ~/claude/empire/snowflake/CLAUDE.md
+    aliases: [snow, sf-data]
+    company: empire
+    type: data-warehouse
+
+  elation:
+    path: ~/claude/empire/elation
+    context: ~/claude/empire/elation/CLAUDE.md
+    aliases: [ehr, health]
+    company: empire
+    type: platform
+
+  jira:
+    path: ~/claude/empire/jira
+    context: ~/claude/empire/jira/CLAUDE.md
+    aliases: [atlassian]
+    company: empire
+    type: platform
+
+  llm:
+    path: ~/claude/empire/llm
+    context: ~/claude/empire/llm/CLAUDE.md
+    aliases: [emp-llm, empire-llm, openwebui]
+    company: empire
+    type: ai-platform
+
+  scraping:
+    path: ~/claude/empire/scraping
+    context: ~/claude/empire/scraping/CLAUDE.md
+    aliases: [broadband, competitive]
+    company: empire
+    type: application
+
+  # =============================================================================
+  # Coldforge Projects
+  # =============================================================================
+
+  atlantis:
+    path: ~/claude/coldforge/atlantis
+    context: ~/claude/coldforge/atlantis/CLAUDE.md
+    aliases: [k8s, kubernetes, atl]
+    company: coldforge
+    type: kubernetes
+    kubeconfig: ~/claude/coldforge/atlantis/kubeconfig
+    kube_context: atlantis
+
+  atlas:
+    path: ~/Atlas
+    context: ~/Atlas/CLAUDE.md
+    aliases: [ansible, iac, infrastructure]
+    company: coldforge
+    type: automation
+
+  ceph:
+    path: ~/claude/coldforge/ceph
+    context: ~/claude/coldforge/ceph/CLAUDE.md
+    aliases: [storage]
+    company: coldforge
+    type: storage
+
+  servarr:
+    path: ~/claude/coldforge/servarr
+    context: ~/claude/coldforge/servarr/CLAUDE.md
+    aliases: [arr, media, plex, jellyfin, sonarr, radarr]
+    company: coldforge
+    type: application
+
+  cloistr:
+    path: ~/Development/cloistr-drive
+    context: ~/claude/coldforge/cloistr/CLAUDE.md
+    aliases: [cloistr-drive, relay]
+    company: coldforge
+    type: application
+    language: rust
+    test_command: cargo test
+    build_command: cargo build --release
+
+  amp:
+    path: ~/claude/coldforge/amp
+    context: ~/claude/coldforge/amp/CLAUDE.md
+    aliases: [gameserver, cubecoders]
+    company: coldforge
+    type: application
+
+  active-directory:
+    path: ~/claude/coldforge/active-directory
+    context: ~/claude/coldforge/active-directory/CLAUDE.md
+    aliases: [ad, samba, dc]
+    company: coldforge
+    type: identity
+
+  openstack:
+    path: ~/claude/coldforge/openstack
+    context: ~/claude/coldforge/openstack/CLAUDE.md
+    aliases: [os, cloud, iaas]
+    company: coldforge
+    type: cloud
+
+  clawstr:
+    path: ~/claude/coldforge/clawstr
+    context: ~/claude/coldforge/clawstr/CLAUDE.md
+    aliases: [nostr, agent]
+    company: coldforge
+    type: ai-agent
+
+  unifi:
+    path: ~/claude/coldforge/unifi
+    context: ~/claude/coldforge/unifi/CLAUDE.md
+    aliases: [network, ubiquiti]
+    company: coldforge
+    type: network
+
+  bitcoin:
+    path: ~/claude/coldforge/bitcoin
+    context: ~/claude/coldforge/bitcoin/CLAUDE.md
+    aliases: [btc, bitcoind]
+    company: coldforge
+    type: application
+
+  # =============================================================================
+  # Personal Projects
+  # =============================================================================
+
+  localhost:
+    path: ~/claude/personal/localhost
+    context: ~/claude/personal/localhost/CLAUDE.md
+    aliases: [local, workstation, battlestation, deathstar]
+    company: personal
+    type: workstation
+
+# =============================================================================
+# Lookup Configuration
+# =============================================================================
+
+settings:
+  # Fuzzy match threshold (0.0 - 1.0)
+  fuzzy_threshold: 0.6
+
+  # Auto-load context when switching projects
+  auto_load_context: true
+
+  # Show project status on switch (git status, etc.)
+  show_status_on_switch: true
