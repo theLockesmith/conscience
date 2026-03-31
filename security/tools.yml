@@ -1,0 +1,177 @@
+# Tool-Specific Security Rules
+# Location: ~/.claude/security/tools.yml
+#
+# This file defines what commands are allowed/blocked for sensitive CLIs.
+# Unknown sensitive tools (wallet, cloud) are BLOCKED until added here.
+#
+# Format:
+#   <tool-name>:
+#     allow:
+#       - "<subcommand-pattern>"  # regex patterns
+#     block:
+#       - "<subcommand-pattern>"
+#     notes: "Optional notes about this tool"
+#
+# Evaluation order:
+#   1. If matches 'block' pattern → BLOCKED
+#   2. If matches 'allow' pattern → ALLOWED
+#   3. If no match → BLOCKED (fail-closed)
+
+# =============================================================================
+# WALLET CLIs - Read operations allowed, mutations blocked
+# =============================================================================
+
+lncli:
+  notes: "Lightning Network CLI - connected to personal node"
+  allow:
+    # Info/status
+    - "^getinfo$"
+    - "^getnetworkinfo$"
+    - "^debuglevel"
+    # Channel queries
+    - "^listchannels"
+    - "^pendingchannels$"
+    - "^closedchannels$"
+    - "^getchaninfo"
+    - "^getnodeinfo"
+    # Invoice/payment queries (read-only)
+    - "^listinvoices"
+    - "^lookupinvoice"
+    - "^listpayments"
+    - "^trackpayment"
+    - "^decodepayreq"
+    # Wallet queries
+    - "^walletbalance$"
+    - "^channelbalance$"
+    - "^listunspent"
+    # Peer queries
+    - "^listpeers$"
+    - "^describegraph"
+    # Forwarding queries
+    - "^fwdinghistory"
+    - "^feereport$"
+  block:
+    # Payment mutations
+    - "^sendpayment"
+    - "^payinvoice"
+    - "^sendtoroute"
+    - "^sendmany"
+    - "^sendcoins"
+    # Channel mutations
+    - "^openchannel"
+    - "^closechannel"
+    - "^closeallchannels"
+    - "^abandonchannel"
+    - "^updatechanpolicy"
+    # Wallet mutations
+    - "^newaddress"
+    - "^signmessage"
+    # Invoice creation (could be phishing vector)
+    - "^addinvoice"
+    # Dangerous operations
+    - "^connect"
+    - "^disconnect"
+    - "^stop$"
+
+bitcoin-cli:
+  notes: "Bitcoin Core CLI"
+  allow:
+    # Blockchain queries
+    - "^getblockchaininfo$"
+    - "^getblockcount$"
+    - "^getblock"
+    - "^getblockhash"
+    - "^gettxout"
+    - "^getmempoolinfo$"
+    # Network queries
+    - "^getnetworkinfo$"
+    - "^getpeerinfo$"
+    - "^getconnectioncount$"
+    # Wallet queries
+    - "^getbalance$"
+    - "^listunspent"
+    - "^listtransactions"
+    - "^gettransaction"
+    # Decoding (read-only)
+    - "^decoderawtransaction"
+    - "^decodescript"
+  block:
+    # Sending
+    - "^sendtoaddress"
+    - "^sendmany"
+    - "^sendrawtransaction"
+    # Key operations
+    - "^dumpprivkey"
+    - "^dumpwallet"
+    - "^importprivkey"
+    - "^signrawtransaction"
+    - "^signmessage"
+    # Wallet creation
+    - "^getnewaddress"
+    - "^encryptwallet"
+    # Node control
+    - "^stop$"
+
+# =============================================================================
+# CLOUD CLIs - Configured for Empire Access AWS work
+# =============================================================================
+
+aws:
+  notes: "AWS CLI - Empire Access account"
+  allow:
+    # Read operations
+    - "^s3 ls"
+    - "^s3 cp.*--dryrun"
+    - "^ec2 describe"
+    - "^iam get"
+    - "^iam list"
+    - "^sts get-caller-identity$"
+    - "^logs describe"
+    - "^logs get"
+    - "^logs filter"
+    - "^cloudwatch get"
+    - "^cloudwatch list"
+    - "^rds describe"
+    - "^lambda list"
+    - "^lambda get"
+    # Safe operations
+    - "^configure list$"
+    - "^configure get"
+  block:
+    # Destructive operations
+    - "^ec2 terminate"
+    - "^ec2 stop"
+    - "^ec2 delete"
+    - "^s3 rm"
+    - "^s3 rb"
+    - "^iam delete"
+    - "^iam remove"
+    - "^rds delete"
+    - "^lambda delete"
+    # Credential exposure
+    - "^iam create-access-key"
+    - "^sts assume-role"
+
+# =============================================================================
+# DATABASE CLIs - Generally allowed (already have block-destructive.sh)
+# =============================================================================
+
+psql:
+  notes: "PostgreSQL CLI - allow most operations, block destructive"
+  allow:
+    - ".*"  # Allow all by default
+  block:
+    - "DROP DATABASE"
+    - "DROP SCHEMA.*CASCADE"
+    - "TRUNCATE"
+
+# =============================================================================
+# TEMPLATE - Copy this for new tools
+# =============================================================================
+
+# <new-tool>:
+#   notes: "Description of tool and its purpose"
+#   allow:
+#     - "^safe-command"
+#   block:
+#     - "^dangerous-command"
