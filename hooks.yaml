@@ -30,58 +30,45 @@ hooks:
       commands:
         - "/home/forgemaster/.claude/hooks/block-destructive.sh"
         - "/home/forgemaster/.claude/hooks/block-secrets.sh"
+        - "/home/forgemaster/.claude/hooks/unknown-tool-detector.sh"
         - "/home/forgemaster/.claude/hooks/enforce-claude-md.sh"
         - "/home/forgemaster/.claude/hooks/filter-verbose-output.sh"
       timeout: 10
-
     - matcher: "Read"
       commands:
         - "/home/forgemaster/.claude/hooks/block-secrets.sh"
         - "/home/forgemaster/.claude/hooks/read-tracker.sh"
       timeout: 5
-
     - matcher: "Glob"
       commands:
         - "/home/forgemaster/.claude/hooks/enforce-claude-md.sh"
       timeout: 5
-
     - matcher: "Grep"
       commands:
         - "/home/forgemaster/.claude/hooks/enforce-claude-md.sh"
       timeout: 5
-
     - matcher: "Task"
       commands:
+        - "/home/forgemaster/.claude/hooks/agent-resource-limits.sh"
         - "/home/forgemaster/.claude/hooks/agent-tracker.sh"
-      timeout: 5
-
+      timeout: 10
     # SHORTCUT BLOCKER - Prevents bypassing existing code paths
     # Created 2026-03-18 after duplicate order incident
     - matcher: "Edit|Write"
       commands:
         - "/home/forgemaster/.claude/hooks/block-shortcuts.sh"
       timeout: 10
-
   # Response validation (rule enforcement) + context extraction + session hygiene + QUALITY ENFORCEMENT
   # Context extraction only runs when context usage > 70% (checked via transcript file size)
   # Quality enforcer BLOCKS half-assed work, deferrals, and missing RAG logging
   # Block sync runs AFTER quality enforcer to capture any new blocks and persist to RAG
-  Stop:
-    - commands:
-        - "/home/forgemaster/.claude/hooks/quality-enforcer.sh"
-        - "/home/forgemaster/.claude/hooks/rule-enforcement-v2.sh"
-        - "/home/forgemaster/.claude/hooks/context-extractor.sh"
-        - "/home/forgemaster/.claude/hooks/session-hygiene.sh"
-        - "/home/forgemaster/.claude/scripts/sync-blocks-to-rag.sh"
-      timeout: 90
-
+  Stop: []
   # Pre-compaction extraction - runs BEFORE compaction to save context
   # This is more reliable than Stop hooks which may not fire after compaction
   PreCompact:
     - commands:
         - "/home/forgemaster/.claude/hooks/pre-compaction-extractor.sh"
       timeout: 120
-
   # Context injection on user prompt + RAG reminders
   UserPromptSubmit:
     - commands:
@@ -92,14 +79,12 @@ hooks:
         - "/home/forgemaster/.claude/hooks/agent-triggers.sh"
         - "/home/forgemaster/.claude/hooks/workflow-detector.sh"
       timeout: 10
-
   # Notification on subagent completion
   SubagentStop:
     - commands:
         - "/home/forgemaster/.claude/hooks/agent-tracker.sh"
         - "/home/forgemaster/.claude/hooks/task-completed-notify.sh"
       timeout: 5
-
   # Post-tool actions
   PostToolUse:
     - matcher: "Edit|Write"
@@ -107,18 +92,16 @@ hooks:
         - "/home/forgemaster/.claude/hooks/post-code-review.sh"
         - "/home/forgemaster/.claude/hooks/weekly-update-reminder.sh"
       timeout: 15
-
     - matcher: "Bash"
       commands:
+        - "/home/forgemaster/.claude/hooks/sanitize-output.sh"
         - "/home/forgemaster/.claude/hooks/weekly-update-reminder.sh"
       timeout: 10
-
     # Track RAG logging to verify memory is being used
     - matcher: "mcp__rag__log"
       commands:
         - "/home/forgemaster/.claude/hooks/rag-usage-tracker.sh"
       timeout: 5
-
   # Session start hooks (new session or after compaction)
   # CRITICAL: session-health-check.sh MUST run first to verify all systems
   # CRITICAL: session-memory-loader.sh loads RAG context so Claude has memory
@@ -130,7 +113,6 @@ hooks:
         - "/home/forgemaster/.claude/hooks/enforce-claude-md-reading.sh"
         - "/home/forgemaster/.claude/hooks/weekly-update-init.sh"
       timeout: 30
-
     - matcher: "compact"
       commands:
         - "/home/forgemaster/.claude/hooks/session-health-check.sh"
@@ -138,11 +120,9 @@ hooks:
         - "/home/forgemaster/.claude/hooks/post-compaction-reminder.sh"
         - "/home/forgemaster/.claude/hooks/weekly-update-init.sh"
       timeout: 30
-
 # Settings
 settings:
   # Enable debug logging
   debug: false
-
   # Default timeout for hooks without explicit timeout
   default_timeout: 30

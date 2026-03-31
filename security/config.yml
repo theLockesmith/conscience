@@ -1,0 +1,70 @@
+# Claude Code Security Configuration
+# This file is read by security hooks to enforce guardrails
+#
+# Philosophy: Block destructive actions, allow reads, require config for new sensitive tools
+
+# Resource limits for agents
+resources:
+  # Max concurrent heavy processes (browsers, test runners)
+  # Set to 0 to disable limiting
+  max_concurrent_heavy: 8  # ~50% of 16 cores
+
+  # Heavy process patterns (regex)
+  heavy_patterns:
+    - "playwright|puppeteer"
+    - "firefox.*headless|chromium.*headless|webkit"
+    - "vitest|jest|mocha"
+    - "webpack|vite.*build"
+
+  # CPU threshold for "heavy" classification (percentage)
+  cpu_threshold: 50
+
+# Tool categories - unknown tools matching these patterns require explicit config
+categories:
+  wallet:
+    description: "Cryptocurrency wallet CLIs"
+    pattern: "lncli|bitcoin-cli|lightning-cli|cast|eth|solana|cardano-cli|monero-wallet-cli"
+    default_action: block_unless_configured
+    message: "Wallet CLI detected but not configured. Add explicit rules to tools.yml first."
+
+  cloud:
+    description: "Cloud provider CLIs"
+    pattern: "^aws|^gcloud|^az\\s|doctl|linode-cli|vultr-cli|hcloud"
+    default_action: warn_unless_configured
+    message: "Cloud CLI detected. Consider adding explicit allow/block rules."
+
+  database:
+    description: "Database CLIs with write capability"
+    pattern: "^psql|^mysql|^mongo|redis-cli|cqlsh|cockroach"
+    default_action: allow  # Most DB work is legitimate
+
+  kubernetes:
+    description: "Kubernetes/OpenShift CLIs"
+    pattern: "^kubectl|^oc\\s|^helm"
+    default_action: configured  # Already have block-destructive.sh
+
+# Secret patterns - these should never appear in output
+secret_patterns:
+  - name: "AWS Access Key"
+    pattern: "AKIA[0-9A-Z]{16}"
+  - name: "GitHub Token"
+    pattern: "ghp_[a-zA-Z0-9]{36}"
+  - name: "Generic API Key"
+    pattern: "sk-[a-zA-Z0-9]{32,}"
+  - name: "Bearer Token"
+    pattern: "Bearer\\s+ey[a-zA-Z0-9._-]+"
+  - name: "Base64 Secret (long)"
+    pattern: "[A-Za-z0-9+/]{64,}={0,2}"
+
+# File patterns that should not be read/output
+sensitive_files:
+  - "*.pem"
+  - "*.key"
+  - "id_rsa*"
+  - "id_ed25519*"
+  - ".env"
+  - ".env.*"
+  - "credentials.json"
+  - "*_credentials*"
+  - ".netrc"
+  - ".npmrc"  # Often contains tokens
