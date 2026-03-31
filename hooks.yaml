@@ -31,6 +31,8 @@ hooks:
         - "/home/forgemaster/.claude/hooks/block-destructive.sh"
         - "/home/forgemaster/.claude/hooks/block-secrets.sh"
         - "/home/forgemaster/.claude/hooks/unknown-tool-detector.sh"
+        - "/home/forgemaster/.claude/hooks/enforce-tool-rules.sh"
+        - "/home/forgemaster/.claude/hooks/warn-network-egress.sh"
         - "/home/forgemaster/.claude/hooks/enforce-claude-md.sh"
         - "/home/forgemaster/.claude/hooks/filter-verbose-output.sh"
       timeout: 10
@@ -54,9 +56,11 @@ hooks:
       timeout: 10
     # SHORTCUT BLOCKER - Prevents bypassing existing code paths
     # Created 2026-03-18 after duplicate order incident
+    # SENSITIVE PATH RESTRICTION - Blocks writes to ~/.ssh, /etc, .env, etc.
     - matcher: "Edit|Write"
       commands:
         - "/home/forgemaster/.claude/hooks/block-shortcuts.sh"
+        - "/home/forgemaster/.claude/hooks/restrict-sensitive-paths.sh"
       timeout: 10
   # Response validation (rule enforcement) + context extraction + session hygiene + QUALITY ENFORCEMENT
   # Context extraction only runs when context usage > 70% (checked via transcript file size)

@@ -51,7 +51,7 @@ done
 if [[ ${#FOUND_SECRETS[@]} -gt 0 ]]; then
     # Log the exposure (don't log the actual output!)
     COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // "unknown"' | head -c 100)
-    echo "[$(date -Iseconds)] POTENTIAL SECRET EXPOSURE: patterns=${FOUND_SECRETS[*]} command=\"$COMMAND\"" >> /tmp/claude-secret-exposures.log
+    echo "[$(date -Iseconds)] SECRET_EXPOSURE: patterns=${FOUND_SECRETS[*]} command=\"$COMMAND\"" >> "$HOME/.claude/security/audit.log"
 
     # Inject warning into context
     cat << EOF

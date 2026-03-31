@@ -59,7 +59,7 @@ fi
 # Log agent spawn for monitoring
 AGENT_TYPE=$(echo "$INPUT" | jq -r '.tool_input.subagent_type // "unknown"')
 DESCRIPTION=$(echo "$INPUT" | jq -r '.tool_input.description // "no description"')
-echo "[$(date -Iseconds)] Spawning agent: type=$AGENT_TYPE desc=\"$DESCRIPTION\" load=$TOTAL_LOAD" >> /tmp/claude-agent-spawns.log
+echo "[$(date -Iseconds)] AGENT_SPAWN: type=$AGENT_TYPE desc=\"$DESCRIPTION\" load=$TOTAL_LOAD" >> "$HOME/.claude/security/audit.log"
 
 # Allow the agent to spawn
 exit 0
