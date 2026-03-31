@@ -97,7 +97,7 @@ KNOWN_CLOUD_PATTERN="^(aws|gcloud|az|doctl|linode-cli|vultr-cli|hcloud|flyctl|ra
 if echo "$FIRST_WORD" | grep -qE "$KNOWN_CLOUD_PATTERN"; then
     if ! is_configured "$FIRST_WORD"; then
         echo "[WARN] Cloud CLI '$FIRST_WORD' not configured in tools.yml. Consider adding rules." >&2
-        echo "[$(date -Iseconds)] WARN: Unconfigured cloud CLI: $FIRST_WORD - $COMMAND" >> /tmp/claude-unconfigured-tools.log
+        echo "[$(date -Iseconds)] UNCONFIGURED_CLOUD: $FIRST_WORD - $COMMAND" >> "$HOME/.claude/security/audit.log"
     fi
     exit 0
 fi
@@ -159,7 +159,7 @@ echo "$DETECTED_TYPE" > "$CACHE_FILE"
 
 # Log detection
 if [[ "$DETECTED_TYPE" != "safe" ]]; then
-    echo "[$(date -Iseconds)] HEURISTIC: $FIRST_WORD detected as $DETECTED_TYPE" >> /tmp/claude-tool-detection.log
+    echo "[$(date -Iseconds)] HEURISTIC_DETECT: $FIRST_WORD as $DETECTED_TYPE" >> "$HOME/.claude/security/audit.log"
 fi
 
 # Act on detection
