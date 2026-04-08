@@ -75,20 +75,32 @@ log_timing() {
 }
 
 # Function to run a hook command with timing
+# Returns via global: HOOK_EXIT_CODE, HOOK_RESULT
 run_hook() {
     local cmd="$1"
     local timeout="${2:-30}"
     local cmd_start=$(date +%s%3N)
 
     # Run the command with input piped to it
-    local result
-    result=$(echo "$INPUT" | timeout "$timeout" bash -c "$cmd" 2>&1)
-    local exit_code=$?
+    # Capture stdout and stderr separately
+    local stdout_file=$(mktemp)
+    local stderr_file=$(mktemp)
+    trap "rm -f '$stdout_file' '$stderr_file'" RETURN
+
+    # Use input file instead of pipe to ensure exit code is captured correctly
+    # Pipes can lose exit codes in some bash edge cases
+    local input_file=$(mktemp)
+    echo "$INPUT" > "$input_file"
+    timeout "$timeout" "$cmd" < "$input_file" >"$stdout_file" 2>"$stderr_file"
+    HOOK_EXIT_CODE=$?
+    rm -f "$input_file"
+    HOOK_RESULT=$(cat "$stdout_file")
+    local stderr_content=$(cat "$stderr_file")
 
     local cmd_end=$(date +%s%3N)
     local cmd_duration=$((cmd_end - cmd_start))
     local cmd_name=$(basename "$cmd" | sed 's/\.sh$//')
-    local result_size=${#result}
+    local result_size=${#HOOK_RESULT}
 
     # Track output size (update temp file atomically)
     local current_size
@@ -96,9 +108,12 @@ run_hook() {
     echo $((current_size + result_size)) > "$TIMING_TMP.size"
 
     # Store timing for this command in temp file
-    echo "{\"cmd\":\"$cmd_name\",\"ms\":$cmd_duration,\"bytes\":$result_size,\"exit\":$exit_code}" >> "$TIMING_TMP"
+    echo "{\"cmd\":\"$cmd_name\",\"ms\":$cmd_duration,\"bytes\":$result_size,\"exit\":$HOOK_EXIT_CODE}" >> "$TIMING_TMP"
 
-    echo "$result"
+    # Log stderr if non-empty (for debugging blocked hooks)
+    if [[ -n "$stderr_content" ]]; then
+        echo "[$(date -Iseconds)] $cmd_name stderr: $stderr_content" >> "$LOG_FILE"
+    fi
 }
 
 # Check if config file exists
@@ -161,37 +176,51 @@ check_matcher() {
 
 # Parse hooks.yaml and execute matching hooks
 # Using yq if available, otherwise fall back to basic parsing
+BLOCK_FILE=$(mktemp)
+trap "rm -f '$BLOCK_FILE'" EXIT
+
 if command -v yq &>/dev/null; then
-    # Get hooks for this hook type
-    HOOKS=$(yq -r ".hooks.${HOOK_TYPE} // [] | .[]" "$CONFIG_FILE" 2>/dev/null)
+    # Get hooks for this hook type as array
+    mapfile -t HOOK_ENTRIES < <(yq -r ".hooks.${HOOK_TYPE}[] | @json" "$CONFIG_FILE" 2>/dev/null)
 
-    if [[ -n "$HOOKS" && "$HOOKS" != "null" ]]; then
-        # Process each hook entry
-        yq -r ".hooks.${HOOK_TYPE}[] | @json" "$CONFIG_FILE" 2>/dev/null | while read -r hook_json; do
-            matcher=$(echo "$hook_json" | jq -r '.matcher // empty')
+    for hook_json in "${HOOK_ENTRIES[@]}"; do
+        [[ -z "$hook_json" || "$hook_json" == "null" ]] && continue
 
-            if check_matcher "$matcher"; then
-                # Get commands for this hook
-                echo "$hook_json" | jq -r '.commands[]? // empty' 2>/dev/null | while read -r cmd; do
-                    if [[ -n "$cmd" ]]; then
-                        result=$(run_hook "$cmd")
+        matcher=$(echo "$hook_json" | jq -r '.matcher // empty')
 
-                        # Check if result is a block decision
-                        if echo "$result" | jq -e '.decision == "block"' >/dev/null 2>&1; then
-                            echo "$result"
-                            log_timing
-                            exit 0
-                        fi
+        if check_matcher "$matcher"; then
+            timeout=$(echo "$hook_json" | jq -r '.timeout // 30')
 
-                        # Output any non-empty result
-                        if [[ -n "$result" ]]; then
-                            echo "$result"
-                        fi
-                    fi
-                done
-            fi
-        done
-    fi
+            # Get commands as array
+            mapfile -t COMMANDS < <(echo "$hook_json" | jq -r '.commands[]? // empty' 2>/dev/null)
+
+            for cmd in "${COMMANDS[@]}"; do
+                [[ -z "$cmd" ]] && continue
+
+                run_hook "$cmd" "$timeout"
+
+                # Block on exit code 2 (hook explicitly blocking)
+                if [[ "$HOOK_EXIT_CODE" -eq 2 ]]; then
+                    BLOCK_REASON="${HOOK_RESULT:-Hook blocked execution (exit 2)}"
+                    echo "{\"decision\": \"block\", \"reason\": \"$BLOCK_REASON\"}"
+                    log_timing
+                    exit 2
+                fi
+
+                # Check if result is a JSON block decision
+                if echo "$HOOK_RESULT" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+                    echo "$HOOK_RESULT"
+                    log_timing
+                    exit 0
+                fi
+
+                # Output any non-empty result
+                if [[ -n "$HOOK_RESULT" ]]; then
+                    echo "$HOOK_RESULT"
+                fi
+            done
+        fi
+    done
 else
     # Fallback: simple grep-based parsing for common patterns
     # This is less flexible but works without yq

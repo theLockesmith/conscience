@@ -87,12 +87,31 @@ for pattern in "${!BLOCKED_PATTERNS[@]}"; do
 done
 
 # =============================================================================
-# WARN PATTERNS - Allow but log warning (user will see in stderr)
+# DELETION COMMANDS - Block unless explicitly approved
+# =============================================================================
+
+# Extract just the command portion before any heredoc (<<) to avoid false positives
+# from commit messages or other string content containing "rm -r"
+COMMAND_BEFORE_HEREDOC="${COMMAND%%<<*}"
+
+# Block rm -r and rm -rf - requires explicit user approval
+# Only check the actual command, not heredoc/string content
+if echo "$COMMAND_BEFORE_HEREDOC" | grep -qE '(^|[;&|])\s*rm\s+(-[a-zA-Z]*[rR]|[^-]+-[a-zA-Z]*[rR])'; then
+    echo "BLOCKED: Recursive delete (rm -r) requires explicit user approval. Ask user before deleting." >&2
+    exit 2
+fi
+
+# Block git rm - only as actual command, not in strings
+if echo "$COMMAND_BEFORE_HEREDOC" | grep -qE '(^|[;&|])\s*git\s+rm\b'; then
+    echo "BLOCKED: git rm requires explicit user approval. Ask user before removing files from git." >&2
+    exit 2
+fi
+
+# =============================================================================
+# WARN PATTERNS - Allow but log warning
 # =============================================================================
 
 declare -A WARN_PATTERNS=(
-    ["rm -r"]="Recursive delete - verify path is correct"
-    ["rm -rf"]="Recursive force delete - verify path is correct"
     ["kubectl scale.*replicas=0"]="Scaling to zero replicas"
     ["oc scale.*replicas=0"]="Scaling to zero replicas"
 )
@@ -101,7 +120,6 @@ for pattern in "${!WARN_PATTERNS[@]}"; do
     if echo "$COMMAND" | grep -qiE "$pattern"; then
         reason="${WARN_PATTERNS[$pattern]}"
         echo "[HOOK WARNING] $reason: $COMMAND" >&2
-        # Don't block, just warn
     fi
 done
 
