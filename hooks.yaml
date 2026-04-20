@@ -30,6 +30,7 @@ hooks:
       commands:
         - "/home/forgemaster/.claude/hooks/block-destructive.sh"
         - "/home/forgemaster/.claude/hooks/block-secrets.sh"
+        - "/home/forgemaster/.claude/hooks/verify-infra-target.sh"
         - "/home/forgemaster/.claude/hooks/unknown-tool-detector.sh"
         - "/home/forgemaster/.claude/hooks/enforce-tool-rules.sh"
         - "/home/forgemaster/.claude/hooks/warn-network-egress.sh"
@@ -66,7 +67,13 @@ hooks:
   # Context extraction only runs when context usage > 70% (checked via transcript file size)
   # Quality enforcer BLOCKS half-assed work, deferrals, and missing RAG logging
   # Block sync runs AFTER quality enforcer to capture any new blocks and persist to RAG
-  Stop: []
+  # QUESTION ANSWERING ENFORCEMENT - Blocks deflection, requires direct answers
+  Stop:
+    - commands:
+        - "/home/forgemaster/.claude/hooks/enforce-rag-post-compaction.sh"
+        - "/home/forgemaster/.claude/hooks/enforce-question-answering.sh"
+        - "/home/forgemaster/.claude/hooks/quality-enforcer.sh"
+      timeout: 10
   # Pre-compaction extraction - runs BEFORE compaction to save context
   # This is more reliable than Stop hooks which may not fire after compaction
   PreCompact:
@@ -106,6 +113,11 @@ hooks:
       commands:
         - "/home/forgemaster/.claude/hooks/rag-usage-tracker.sh"
       timeout: 5
+    # Track ANY RAG call to clear post-compaction enforcement
+    - matcher: "mcp__rag__"
+      commands:
+        - "/home/forgemaster/.claude/hooks/rag-call-tracker.sh"
+      timeout: 5
   # Session start hooks (new session or after compaction)
   # CRITICAL: session-health-check.sh MUST run first to verify all systems
   # CRITICAL: session-memory-loader.sh loads RAG context so Claude has memory
@@ -121,6 +133,7 @@ hooks:
       commands:
         - "/home/forgemaster/.claude/hooks/session-health-check.sh"
         - "/home/forgemaster/.claude/hooks/session-memory-loader.sh"
+        - "/home/forgemaster/.claude/hooks/compaction-state-tracker.sh"
         - "/home/forgemaster/.claude/hooks/post-compaction-reminder.sh"
         - "/home/forgemaster/.claude/hooks/weekly-update-init.sh"
       timeout: 30

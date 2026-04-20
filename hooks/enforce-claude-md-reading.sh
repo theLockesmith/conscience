@@ -12,7 +12,7 @@ STARTUP - READ GLOBAL RULES ONLY:
 
 You are starting a new session. Before responding:
 
-1. READ the global CLAUDE.md at ~/claude/CLAUDE.md
+1. READ the global CLAUDE.md at ~/arbiter/CLAUDE.md
    - This contains critical safety rules (never restart docker, never force delete, etc.)
    - Use the Read tool - this is REQUIRED
 

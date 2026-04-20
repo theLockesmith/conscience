@@ -3,6 +3,11 @@
 # Location: ~/.claude/hooks/block-secrets.sh
 # Applies to: Bash tool (commands) AND Read tool (file paths)
 #
+# SUBSHELL PATTERN: Secret access is ALLOWED inside $(...) subshells where
+# output goes to a consuming command (never returns to Claude). Example:
+#   psql "postgres://user:$(oc get secret X -o jsonpath='{.data.pass}' | base64 -d)@host/db"
+# This lets Claude USE secrets without VIEWING them.
+#
 # Uses exit 2 to block - Claude Code hooks block on non-zero exit
 
 set -uo pipefail
@@ -84,16 +89,26 @@ COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 # KUBERNETES/OPENSHIFT SECRET ACCESS
 # ============================================
 
+# K8s secret access - block standalone, allow in subshells (like atlas vault pattern)
 if echo "$COMMAND" | grep -qE '(kubectl|oc).*get.*secret.*-o'; then
-    block "Retrieving secret data. Never expose secret values."
+    # Check if it's inside a subshell (output goes to consuming command)
+    MAIN_CMD="${COMMAND%%\$(*}"
+    if echo "$MAIN_CMD" | grep -qE '(kubectl|oc).*get.*secret.*-o'; then
+        block "Retrieving secret data as standalone command. You CAN use secrets in subshells where output goes to a consuming command: cmd --key=\$(oc get secret X -o jsonpath='{.data.key}' | base64 -d). The subshell output never returns to Claude."
+    fi
+    # Inside subshell - allow it (output goes to parent command)
 fi
 
 if echo "$COMMAND" | grep -qE '(kubectl|oc).*get.*secret.*jsonpath'; then
-    block "Retrieving secret data via jsonpath. Never expose secret values."
+    MAIN_CMD="${COMMAND%%\$(*}"
+    if echo "$MAIN_CMD" | grep -qE '(kubectl|oc).*get.*secret.*jsonpath'; then
+        block "Retrieving secret via jsonpath as standalone command. Use inside subshell: cmd --key=\$(oc get secret X -o jsonpath='{.data.key}' | base64 -d)"
+    fi
 fi
 
 if echo "$COMMAND" | grep -qE '(kubectl|oc).*describe.*secret'; then
-    block "Describing secrets exposes data. Never expose secret values."
+    # describe is always blocked - no legitimate subshell use case
+    block "Describing secrets exposes data. To USE a secret: reference via secretKeyRef in pod specs, mount as volume, or use get+jsonpath in a subshell."
 fi
 
 if echo "$COMMAND" | grep -qE '(kubectl|oc).*get.*(configmap|cm).*-o'; then
@@ -147,9 +162,14 @@ if echo "$COMMAND" | grep -qE '(cat|head|tail|less|more|bat|view)\s+.*secrets.*\
     block "Reading secrets file via command."
 fi
 
-# Block reading credential files
-if echo "$COMMAND" | grep -qE '(cat|head|tail|less|more|bat|view)\s+.*credentials'; then
+# Block reading credential files (including .cre shorthand)
+if echo "$COMMAND" | grep -qE '(cat|head|tail|less|more|bat|view)\s+.*(credentials|\.cre)'; then
     block "Reading credentials file via command."
+fi
+
+# Block reading FTP credential files
+if echo "$COMMAND" | grep -qE '(cat|head|tail|less|more|bat|view)\s+.*(\.netftp|\.ftp|ftp.*cred|ftp.*pass)'; then
+    block "Reading FTP credentials file via command."
 fi
 
 # Block reading config files that commonly contain secrets
@@ -168,11 +188,36 @@ if echo "$COMMAND" | grep -qE '(cat|head|tail|less|more|bat|view)\s+.*\.docker/c
 fi
 
 # ============================================
+# SSH-WRAPPED COMMANDS - Detect credential reads via SSH
+# ============================================
+
+# Block SSH commands that read credential files remotely
+if echo "$COMMAND" | grep -qE 'ssh\s+\S+.*".*\b(cat|head|tail|less|more)\b.*\.(cre|env|netftp|ftp|pem|key)"'; then
+    block "Reading credentials via SSH. Never expose remote secrets."
+fi
+
+if echo "$COMMAND" | grep -qE "ssh\s+\S+.*'.*\b(cat|head|tail|less|more)\b.*\.(cre|env|netftp|ftp|pem|key)'"; then
+    block "Reading credentials via SSH. Never expose remote secrets."
+fi
+
+# Block SSH commands that grep for passwords/secrets
+if echo "$COMMAND" | grep -qE 'ssh\s+\S+.*(password|secret|credential|token|apikey)'; then
+    block "SSH command searching for sensitive data."
+fi
+
+# ============================================
 # BASE64 DECODE OF SECRETS
 # ============================================
 
-if echo "$COMMAND" | grep -qE '(kubectl|oc).*secret.*\|\s*base64'; then
-    block "Decoding secret data via base64."
+# Only block GET/describe operations that pipe secret output to base64 decode
+# ALLOW when inside subshell (output goes to consuming command, not Claude)
+if echo "$COMMAND" | grep -qE '(kubectl|oc).*\b(get|describe)\b.*secret.*\|\s*base64'; then
+    MAIN_CMD="${COMMAND%%\$(*}"
+    # Only block if the secret access is in the MAIN command (standalone), not inside $()
+    if echo "$MAIN_CMD" | grep -qE '(kubectl|oc).*\b(get|describe)\b.*secret'; then
+        block "Decoding secret data via base64. Use inside subshell: cmd --arg=\$(oc get secret X -o jsonpath='{.data.key}' | base64 -d)"
+    fi
+    # Inside subshell - allow it
 fi
 
 # ============================================

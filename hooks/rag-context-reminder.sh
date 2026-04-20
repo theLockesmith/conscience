@@ -29,6 +29,37 @@ PROMPT_LOWER=$(echo "$USER_PROMPT" | tr '[:upper:]' '[:lower:]')
 # PATTERN DETECTION
 # ============================================================================
 
+# ============================================================================
+# CRITICAL LEARNINGS - ALWAYS INJECT
+# Query RAG for critical gotchas and inject them every time
+# ============================================================================
+
+# Check for critical learnings in RAG (category=gotcha or has 'critical'/'hooks' tags)
+POSTGRES_PASSWORD=$(jq -r '.mcpServers.rag.env.POSTGRES_PASSWORD // empty' ~/.claude.json 2>/dev/null)
+if [[ -n "$POSTGRES_PASSWORD" ]]; then
+    CRITICAL=$(PGPASSWORD="$POSTGRES_PASSWORD" psql -h "${POSTGRES_HOST:-postgres-rw.db.aegis-hq.xyz}" -p "${POSTGRES_PORT:-5432}" \
+        -U "${POSTGRES_USER:-rag}" -d "${POSTGRES_DB:-ragdb}" -t -A 2>/dev/null << 'SQL'
+SELECT string_agg(content, E'\n- ')
+FROM (
+    SELECT DISTINCT ON (content) content, created_at
+    FROM learnings
+    WHERE category = 'gotcha'
+       OR 'critical' = ANY(tags)
+       OR 'hooks' = ANY(tags)
+    ORDER BY content, created_at DESC
+    LIMIT 10
+) sub;
+SQL
+    )
+
+    if [[ -n "$CRITICAL" && "$CRITICAL" != "" ]]; then
+        echo "<critical-learnings>"
+        echo "**APPLY THESE RULES TO YOUR RESPONSE:**"
+        echo "- $CRITICAL"
+        echo "</critical-learnings>"
+    fi
+fi
+
 OUTPUT=""
 
 # Pattern 1: Questions about past work

@@ -1,135 +1,152 @@
 # Conscience
 
-**Arbiter's integrity layer - quality enforcement, health checks, and context management for Claude Code.**
+**Quality enforcement and integrity layer for AI-assisted development with Claude Code.**
 
-Conscience is the self-imposed enforcement system that makes [Arbiter](https://claude.ai/claude-code) operate by principle rather than compliance. It blocks half-assed work, verifies before claiming completion, and ensures technical correctness over shortcuts.
+Conscience is a hook-based enforcement system that ensures AI assistants operate with engineering rigor. It blocks half-measures, requires verification, and prevents the shortcuts that make AI-generated code unreliable.
 
-## Philosophy
+## Why This Exists
 
-> "You operate by conscience, not compliance. Your integrity is self-imposed and non-negotiable."
+AI coding assistants have a fundamental problem: they optimize for appearing helpful over being correct. They'll:
+- Say "should work" instead of verifying
+- Propose quick fixes instead of proper solutions
+- Hedge with "both options are valid" instead of making decisions
+- Apologize excessively instead of just fixing the problem
+- Forget context and repeat mistakes across sessions
 
-- **Verification is mandatory** - Never claim completion without proof
-- **Assumptions are failures** - Test, don't predict
-- **Decisiveness over hedging** - State what's correct, not options
-- **No shortcuts, ever** - The proper solution, regardless of effort
+Conscience solves this by intercepting responses before they reach the user and blocking those that violate engineering principles. It's not about restricting the AI—it's about holding it to the same standards you'd hold a senior engineer.
+
+## What It Catches
+
+**33 enforcement categories** including:
+
+| Category | Blocks | Example |
+|----------|--------|---------|
+| **Verification** | Claiming completion without proof | "This should work now" → BLOCKED |
+| **Hedging** | Refusing to make decisions | "Both approaches are valid" → BLOCKED |
+| **Deferral** | Postponing required work | "We can add logging later" → BLOCKED |
+| **Speed>Correctness** | Shortcuts over proper solutions | "Quick fix for now" → BLOCKED |
+| **Apology/Validation** | Sycophancy | "Great question!" → BLOCKED |
+| **Assumptions** | Not verifying before acting | "I assume this uses..." → BLOCKED |
+| **Observability** | Silent failures | Code without logging → BLOCKED |
+| **Infrastructure Suggestion** | Lazy questions | "Do you use Redis?" → BLOCKED (check RAG first) |
+| **Unverified Target** | Wrong system access | Running commands without confirming target → BLOCKED |
+
+### Concrete Examples
+
+```
+❌ BLOCKED: "I'll add error handling in a future iteration"
+   Reason: Deferral - must implement now, not later
+
+❌ BLOCKED: "This should resolve the issue"
+   Reason: Verification - must confirm it works, not guess
+
+❌ BLOCKED: "Both PostgreSQL and MongoDB would work here"
+   Reason: Wishy-Washy - recommend one with rationale
+
+❌ BLOCKED: "Great question! Let me help you with that"
+   Reason: Apology/Validation - just answer the question
+
+✓ ALLOWED: "Fixed. Verified by running test suite - all 47 tests pass."
+```
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Claude Code CLI                       │
+└─────────────────────┬───────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────────────┐
+│                   hooks.yaml (dispatcher)                │
+│  Routes events to appropriate enforcement scripts        │
+└─────────────────────┬───────────────────────────────────┘
+                      │
+        ┌─────────────┼─────────────┐
+        ▼             ▼             ▼
+┌───────────┐  ┌───────────┐  ┌───────────┐
+│ PreToolUse│  │   Stop    │  │ Session   │
+│           │  │           │  │ Start     │
+│ - Block   │  │ - Quality │  │ - Health  │
+│   secrets │  │   enforce │  │   check   │
+│ - Block   │  │ - RAG     │  │ - Load    │
+│   destruct│  │   remind  │  │   memory  │
+└───────────┘  └───────────┘  └───────────┘
+```
 
 ## Components
 
 ### Quality Enforcer (`hooks/quality-enforcer.sh`)
-
-Blocks responses that violate engineering principles. 27 enforcement categories including:
-
-- **Lifecycle Management** - No infinite states, must have timeouts/cleanup
-- **Data Operations** - Idempotency, duplicate detection, state validation
-- **Verification** - Testing required, no "should work" assumptions
-- **Observability** - Logging required, no silent failures
-- **Speed Over Correctness** - Blocks "quick fix", "easiest", "simplest"
-- **Wishy-Washy** - Blocks "both are valid", must recommend one
-- **Apology/Validation** - Blocks sycophancy, "great question", excessive politeness
-
-Configuration:
-- `quality-sensitivity.conf` - Per-category sensitivity (block/warn/disabled)
-- `quality-whitelist.conf` - Known false positives
+The core enforcement engine. 577 lines of pattern matching that blocks responses violating engineering principles. Configurable sensitivity per category.
 
 ### Session Health Check (`hooks/session-health-check.sh`)
-
-Verifies system connectivity at session start and on-demand:
-
-- **RAG Database** - PostgreSQL connectivity
-- **Ollama** - Embedding server availability
-- **Tribunal** - System prompt/identity active
-- **MCP Server** - Model Context Protocol functional
-
-Outputs status to:
-- Claude's context (system-reminder banner)
-- Terminal (user-visible line)
-- Tmux pane status file (`pane-status/*.status`)
+Verifies system connectivity at session start:
+- RAG database (PostgreSQL)
+- Embedding server (Ollama)
+- MCP server status
 
 ### Model Router (`hooks/model-router.sh`)
-
-Classifies prompt complexity and suggests optimal model tier:
-
-- **haiku** - Simple lookups, status checks, formatting
-- **sonnet** - Code review, documentation, exploration (default)
-- **opus** - Complex architecture, implementation, debugging
+Classifies prompt complexity and suggests optimal model tier (haiku/sonnet/opus) for cost-aware routing.
 
 ### Context Management
+- `auto-project-context.sh` - Injects project documentation on mention
+- `session-memory-loader.sh` - Loads persistent memory at session start
+- `context-extractor.sh` - Extracts learnings before context compaction
 
-- `hooks/auto-project-context.sh` - Injects project CLAUDE.md on mention
-- `hooks/context-extractor.sh` - Extracts learnings before compaction
-- `hooks/session-memory-loader.sh` - Loads RAG context at session start
-- `hooks/rag-context-reminder.sh` - Reminds to use RAG tools
-
-### Rule Enforcement
-
-- `hooks/block-destructive.sh` - Prevents dangerous commands (docker restart, force delete)
-- `hooks/block-secrets.sh` - Prevents reading credential files
-- `hooks/block-shortcuts.sh` - Prevents bypassing existing code paths
-- `hooks/enforce-claude-md.sh` - Ensures CLAUDE.md is read before work
-
-## Directory Structure
-
-```
-~/.claude/
-├── hooks/                  # All enforcement scripts
-│   ├── quality-enforcer.sh # Main quality enforcement
-│   ├── session-health-check.sh
-│   ├── model-router.sh
-│   └── ...
-├── agents/                 # Tribunal domain expert definitions
-├── skills/                 # Workflow skill definitions
-├── templates/              # Convention templates
-├── pane-status/            # Tmux status scripts
-├── hooks.yaml              # Hook configuration (hot-reloadable)
-├── system-prompt.md        # Arbiter persona
-├── projects.yaml           # Project registry
-├── quality-sensitivity.conf
-├── quality-whitelist.conf
-├── claude-wrapper.sh       # Wrapper with system prompt
-└── workflows.yaml          # Workflow definitions
-```
+### Safety Rails
+- `block-destructive.sh` - Prevents `docker restart`, force deletes, etc.
+- `block-secrets.sh` - Prevents reading credential files
+- `verify-infra-target.sh` - Requires target confirmation before infrastructure commands
 
 ## Hook Types
 
 | Hook | When | Purpose |
 |------|------|---------|
 | `PreToolUse` | Before tool execution | Block dangerous operations |
-| `PostToolUse` | After tool completion | Track usage, remind about docs |
+| `PostToolUse` | After tool completion | Track usage, update docs |
 | `Stop` | Before response shown | Quality enforcement |
 | `UserPromptSubmit` | On user message | Context injection, routing |
-| `SessionStart` | New session/compaction | Health check, memory loading |
-| `SubagentStop` | Agent completion | Notification, tracking |
+| `SessionStart` | New session | Health check, memory loading |
 
-## The Stack
+## Configuration
 
-| Component | Role |
-|-----------|------|
-| **Arbiter** | Claude Code instance identity |
-| **The Tribunal** | Council of domain experts (subagents) |
-| **Conscience** | This repo - enforcement layer |
-| **RAG** | Persistent memory (PostgreSQL + embeddings) |
+### Sensitivity Tuning (`quality-sensitivity.conf`)
+```ini
+# Per-category sensitivity: block, warn, or disabled
+Deferral=block
+Hedging=block
+Apology/Validation=warn
+TODO/FIXME Creation=disabled
+```
+
+### Whitelist (`quality-whitelist.conf`)
+Known false positives that should be allowed.
+
+### Hot Reload
+Changes to `hooks.yaml` and config files take effect immediately—no restart required.
 
 ## Installation
 
-Conscience is designed for a specific setup. Key dependencies:
-
-- Claude Code CLI
-- PostgreSQL (RAG database)
+Designed for Claude Code CLI with:
+- PostgreSQL (persistent memory/RAG)
 - Ollama (embeddings)
-- tmux (optional, for pane status)
+- tmux (optional, for status display)
 
-The `hooks.yaml` file configures which hooks run when. Changes take effect immediately (hot-reload).
+Clone to `~/.claude/` and configure `hooks.yaml` to point to the scripts.
 
-## Emergency Kill Switch
+## Emergency Bypass
 
-If quality enforcement is blocking legitimate work:
-
+If enforcement is blocking legitimate work:
 ```bash
 export DISABLE_QUALITY_ENFORCER=1
 ```
 
-This bypasses all enforcement checks until unset.
+## The Philosophy
+
+> "You operate by conscience, not compliance. Your integrity is self-imposed and non-negotiable."
+
+Conscience exists because AI assistants should be held to engineering standards, not excused from them. The goal isn't restriction—it's reliability.
 
 ## License
 
-Personal use. Not intended for distribution.
+MIT License - Use freely, contribute welcome.

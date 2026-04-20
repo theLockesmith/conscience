@@ -27,7 +27,8 @@ fi
 
 declare -A BLOCKED_PATTERNS=(
     # Force flags - must be standalone, not part of --from or -f /file
-    ["--force"]="Force flag detected"
+    # Note: --force-with-lease is allowed (safer alternative, checks remote hasn't changed)
+    # The --force pattern is checked separately below to exclude --force-with-lease
     # Note: -f short form removed - too many false positives with -f /file and --from=
     ["--grace-period=0"]="Force delete with no grace period"
     ["--grace-period 0"]="Force delete with no grace period"
@@ -49,8 +50,7 @@ declare -A BLOCKED_PATTERNS=(
     ["ansible-vault view"]="Vault view (exposes secrets)"
 
     # Git destructive operations
-    ["git push --force"]="Force push"
-    ["git push -f"]="Force push (short form)"
+    # Note: git push --force and -f handled separately below to allow --force-with-lease
     ["git reset --hard"]="Hard reset"
     ["git clean -fd"]="Force clean"
 
@@ -104,6 +104,18 @@ fi
 # Block git rm - only as actual command, not in strings
 if echo "$COMMAND_BEFORE_HEREDOC" | grep -qE '(^|[;&|])\s*git\s+rm\b'; then
     echo "BLOCKED: git rm requires explicit user approval. Ask user before removing files from git." >&2
+    exit 2
+fi
+
+# Block --force but allow --force-with-lease (safer alternative)
+if echo "$COMMAND" | grep -qE '\-\-force($|\s)' && ! echo "$COMMAND" | grep -q '\-\-force-with-lease'; then
+    echo "BLOCKED: --force flag detected. Use --force-with-lease for safer force push, or get explicit user approval." >&2
+    exit 2
+fi
+
+# Block git push -f (short form) but allow if --force-with-lease is also present
+if echo "$COMMAND" | grep -qE 'git\s+push\s+.*-f($|\s)' && ! echo "$COMMAND" | grep -q '\-\-force-with-lease'; then
+    echo "BLOCKED: git push -f (force push). Use --force-with-lease for safer force push, or get explicit user approval." >&2
     exit 2
 fi
 
