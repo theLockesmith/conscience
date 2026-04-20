@@ -1,5 +1,8 @@
 #!/bin/bash
-# Quality Enforcer v7 - 27 enforcement categories
+# Quality Enforcer v14 - 30 enforcement categories
+# v14: Added ABSOLUTE_PATH - blocks /home/forgemaster/ in text output, requires ~/ paths
+# v13: Tightened DEPLOYMENT_UNVERIFIED escape - no longer accepts "http 200", "test results"
+#      Now requires actual agent invocation evidence (subagent_type, screenshot saved, etc.)
 # Hook: Stop
 #
 # OPTIMIZATIONS (v6+):
@@ -15,6 +18,7 @@
 # SCOPE CREEP | NOT VERIFYING | IGNORING ERRORS | INCOMPLETE REQS
 # NOT CHECKING | APOLOGY/VALID | UNEXPLAINED | MEMORY
 # SECURITY | RESOURCE CLEANUP | BREAKING CHANGES | DEPENDENCIES
+# INFRA SUGGESTION (must search RAG before suggesting infrastructure actions)
 #
 # NON-NEGOTIABLE: Every violation is a HARD BLOCK. No exceptions.
 
@@ -189,8 +193,22 @@ check_and_block() {
         echo "Response excerpt: ${RESPONSE:0:300}..." >> "$LOG_FILE"
         echo "---" >> "$LOG_FILE"
 
+        # Circuit breaker: track consecutive blocks
+        BLOCK_COUNT_FILE="$STATE_DIR/${SESSION_ID}.qe_block_count"
+        BLOCK_COUNT=0
+        [[ -f "$BLOCK_COUNT_FILE" ]] && BLOCK_COUNT=$(cat "$BLOCK_COUNT_FILE")
+        BLOCK_COUNT=$((BLOCK_COUNT + 1))
+        echo "$BLOCK_COUNT" > "$BLOCK_COUNT_FILE"
+
+        # After 5 consecutive blocks, allow to prevent infinite loops
+        if [[ $BLOCK_COUNT -ge 5 ]]; then
+            echo "[$(date -Iseconds)] CIRCUIT BREAKER TRIPPED after $BLOCK_COUNT blocks - allowing" >> "$LOG_FILE"
+            rm -f "$BLOCK_COUNT_FILE"
+            return 1
+        fi
+
         cat << EOF
-{"decision": "block", "reason": "$reason ('$matched')"}
+{"decision": "block", "reason": "STOP GENERATING TEXT. $reason ('$matched') - Use a TOOL CALL to verify/research instead of guessing."}
 EOF
         exit 0
     fi
@@ -423,6 +441,81 @@ check_and_block "Dependency Additions" "$DEPEND_P" "$DEPEND_ESC" \
     "DEPENDENCY BLOCKED: Do NOT add dependencies without justification. Prefer standard library. Evaluate alternatives." \
     "DEPENDENCY_ADDITIONS"
 
+# RAG-FIRST - Must search RAG before filesystem searches for non-specific queries
+# Catches: Using glob/grep to search for information that RAG likely has
+# Exception: Specific file paths, class definitions, or code patterns
+RAG_FIRST_P="let me.*glob|let me.*grep|using glob|using grep|i'll search.*files|searching.*filesystem|looking in.*directory|let me find|let me look for|searching for.*files|searching through.*code|let me check.*files|globbing for|grepping for"
+# Escape: Already searched RAG, or looking for specific file/class/pattern
+RAG_FIRST_ESC="mcp__rag|search_docs|search_learnings|search_decisions|get_session_context|get_project_context|rag.*search|searched rag|rag showed|specific file|class definition|function definition|\.py$|\.ts$|\.go$|\.rs$|line [0-9]"
+
+check_and_block "RAG-First" "$RAG_FIRST_P" "$RAG_FIRST_ESC" \
+    "RAG-FIRST BLOCKED: Search RAG FIRST before filesystem searches. RAG has indexed documentation, decisions, and learnings." \
+    "RAG_FIRST"
+
+# INFRASTRUCTURE SUGGESTION - Suggesting infrastructure actions without RAG verification
+# Catches: ANY suggestion to check/look at/investigate infrastructure
+# Also catches: Questions to user about infrastructure that should be in RAG
+# This blocks SUGGESTIONS AND LAZY QUESTIONS, not just commands
+INFRA_SUGGEST_P="let me check.*cluster|let me check.*database|let me check.*ceph|let me check.*server|let me check.*status|let me check.*health|let me check.*pod|let me check.*node|let me look at.*health|let me look at.*status|let me look at.*logs|let me verify.*status|let me verify.*health|i'll check.*cluster|i'll check.*database|i'll check.*ceph|i'll check.*server|i'll check.*pods|i'll check.*nodes|let's look at.*status|let's look at.*health|let's look at.*cluster|let's check.*health|let's check.*status|should we check.*cluster|should we check.*database|should i check.*logs|should i check.*status|i can check.*cluster|i can check.*database|i can check.*logs|checking.*cluster.*health|checking.*database.*status|investigating.*cluster|investigating.*server|examining.*ceph|examining.*database|want me to check.*cluster|want me to check.*database|want me to look at|first.*check.*cluster|first.*check.*database|first.*check.*status|start by checking|start by looking at.*logs|do you use this.*domain|do you use this.*cluster|do you use this.*server|do you use this.*database|do you use this.*service|do you use.*ad domain|do you still use|is this.*still in use|are you using this|is this service.*used|is this.*needed|do you need this.*running"
+# Escape: Must show RAG was searched in THIS response BEFORE the suggestion
+INFRA_SUGGEST_ESC="mcp__rag__search|search_docs.*showed|search_learnings.*showed|search_decisions.*showed|rag.*shows|from rag|per rag|rag indicates|rag confirms|rag says|checked rag|searched rag|rag search.*returned"
+
+check_and_block "Infrastructure Suggestion" "$INFRA_SUGGEST_P" "$INFRA_SUGGEST_ESC" \
+    "INFRASTRUCTURE QUESTION/SUGGESTION BLOCKED: You asked user about or suggested checking infrastructure WITHOUT searching RAG first. RAG has this information - search it BEFORE asking the user or suggesting actions." \
+    "INFRA_SUGGESTION"
+
+# PROJECT_KNOWLEDGE - Explaining what a known system/project IS without RAG verification
+# Catches: Confident explanations of project purpose/function without RAG evidence
+# Known projects: empire systems, coldforge infra, personal tools
+PROJECT_KNOW_P="elation is a|elation is an|elation is the|elation provides|elation handles|salesforce is a|salesforce is an|salesforce provides|snowflake is a|snowflake is an|snowflake provides|cloistr is a|cloistr is an|cloistr provides|servarr is a|servarr is an|servarr provides|kafka is a|kafka is an|kafka provides|ceph is a|ceph is an|ceph provides|openstack is a|openstack is an|openstack provides|atlas is a|atlas is an|atlas provides|argocd is a|argocd is an|argocd provides|thunderhub is a|thunderhub is an|thunderhub provides|lnd is a|lnd is an|lnd provides|actifai is a|actifai is an|actifai provides|the elation|the salesforce|the snowflake|the cloistr|the servarr system|the kafka|the ceph|the openstack|the atlas system|the argocd"
+# Escape: RAG search evidence
+PROJECT_KNOW_ESC="mcp__rag__search|search_docs|search_learnings|search_decisions|rag.*showed|rag.*shows|from rag|per rag|rag confirms|checked rag|searched rag|claude\.md.*says|per.*claude\.md"
+
+check_and_block "Project Knowledge" "$PROJECT_KNOW_P" "$PROJECT_KNOW_ESC" \
+    "PROJECT KNOWLEDGE BLOCKED: You explained what a system/project IS without searching RAG first. Check RAG or CLAUDE.md before explaining what systems do." \
+    "PROJECT_KNOWLEDGE"
+
+# UNVERIFIED TARGET - Running commands against ANY infrastructure without verification
+# Catches: ALL infrastructure commands - k8s clusters, databases, VMs, cloud platforms, services
+# TWO K8S CLUSTERS: atlantis, pantheon
+# DATABASES: standalone and k8s-clustered postgres, redis, etc.
+# VMs: ssh to any VM
+# CLOUD: openstack, ceph commands
+# SERVICES: curl/wget to endpoints, nginx, proxies
+UNVERIFIED_P="oc-atlantis|oc-pantheon|kubectl|oc exec|oc get|oc describe|oc logs|psql|mysql|redis-cli|mongo|ssh .*@|openstack |ceph |rbd |rados |curl .*localhost|curl .*\.svc\.|curl .*\.xyz|curl .*\.local|wget .*localhost|wget .*\.svc\.|wget .*\.xyz|nginx|systemctl.*start|systemctl.*stop|systemctl.*restart|ansible-playbook|ansible .*-m|docker exec|podman exec|helm |argocd |let me query|checking.*database|querying|ran.*against|executed.*on|connected to|connecting to"
+# Escape requires SPECIFIC verification showing target matches RAG results
+# Must show: RAG result content that confirms the specific target being accessed
+# Generic mentions of "health_check" or "search_docs" are NOT enough
+UNVERIFIED_ESC="rag.*showed.*this|search.*confirmed|verified.*matches|documentation shows.*this|per the docs.*this|ragdb@postgres-rw\.db\.aegis|health_check.*showed.*132k|get_indexed_stats.*showed|the correct database is|verified the target|confirmed this is the right|matches what rag showed"
+
+check_and_block "Unverified Target" "$UNVERIFIED_P" "$UNVERIFIED_ESC" \
+    "UNVERIFIED TARGET BLOCKED: You ran infrastructure commands without showing the target matches RAG results. Show SPECIFIC evidence that RAG confirmed THIS is the correct target." \
+    "UNVERIFIED_TARGET"
+
+# DEPLOYMENT WITHOUT VERIFICATION - Claiming deployment success without agent verification
+# Catches: Completion claims about deployments/sites without site-tester evidence
+# This is the specific enforcement for "agents exist but don't get used"
+DEPLOY_UNVERIFIED_P="deployment.*complete|deployed.*successfully|successfully deployed|is now working|is now live|site is.*working|site is.*live|site is.*up|application.*deployed|app.*deployed|service.*deployed|verified.*working|confirmed.*working|the deployment|deployment is.*done|deployment.*finished|up and running|live now|now live|works correctly|working correctly|page.*loads|loads correctly|ui.*working|frontend.*working|backend.*working"
+# Escape: Evidence of ACTUAL verification via site-tester, ui-tester, or equivalent agent
+# STRICT: Must show agent invocation (Task tool call) or actual test output
+# REMOVED: http.*200, status.*200, test.*results, test.*passed - too easy to claim without doing
+DEPLOY_UNVERIFIED_ESC="subagent_type.*site-tester|subagent_type.*ui-tester|subagent_type.*playwright|subagent_type.*api-tester|subagent_type.*component-tester|site-tester.*agent|ui-tester.*agent|screenshot.*saved.*png|screenshot.*saved.*jpg|playwright.*test.*output|npx playwright test|PASS.*site-tester|Result:.*screenshot|browser-test-runner"
+
+check_and_block "Deployment Without Verification" "$DEPLOY_UNVERIFIED_P" "$DEPLOY_UNVERIFIED_ESC" \
+    "DEPLOYMENT WITHOUT VERIFICATION BLOCKED: You claimed deployment success without using site-tester, ui-tester, or equivalent verification agent. Use a testing agent BEFORE claiming it works." \
+    "DEPLOYMENT_WITHOUT_VERIFICATION"
+
+# ABSOLUTE PATHS - Must use ~/ when showing paths to user
+# Catches: /home/forgemaster/ in text output (tool calls excluded by design)
+# User explicitly requested ~/relative paths always
+ABSPATH_P="/home/forgemaster/"
+# No escape - this is a hard rule for display output
+ABSPATH_ESC=""
+
+check_and_block "Absolute Path" "$ABSPATH_P" "$ABSPATH_ESC" \
+    "ABSOLUTE PATH BLOCKED: Use ~/relative paths when showing paths to user, not /home/forgemaster/." \
+    "ABSOLUTE_PATH"
+
 # =============================================================================
 # RAG LOGGING CHECK - Must log significant actions
 # =============================================================================
@@ -477,5 +570,8 @@ if echo "$RESPONSE_LOWER" | grep -qiE "fix.*bug|fixing.*issue|debug|troubleshoot
         echo "<system-reminder>WARNING: Bug fix without workflow. Consider /skill fix-bug</system-reminder>"
     fi
 fi
+
+# Reset circuit breaker on successful response
+rm -f "$STATE_DIR/${SESSION_ID}.qe_block_count" 2>/dev/null || true
 
 exit 0

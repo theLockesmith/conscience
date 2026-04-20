@@ -18,8 +18,8 @@ STATE_DIR="$HOME/.claude/session-state"
 mkdir -p "$STATE_DIR"
 
 # Configuration - matches RAG server settings
-POSTGRES_HOST="${POSTGRES_HOST:-10.51.1.20}"
-POSTGRES_PORT="${POSTGRES_PORT:-30432}"
+POSTGRES_HOST="${POSTGRES_HOST:-postgres-rw.db.aegis-hq.xyz}"
+POSTGRES_PORT="${POSTGRES_PORT:-5432}"
 POSTGRES_DB="${POSTGRES_DB:-ragdb}"
 POSTGRES_USER="${POSTGRES_USER:-rag}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"

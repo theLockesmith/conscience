@@ -18,8 +18,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Configuration
-POSTGRES_HOST="${POSTGRES_HOST:-10.51.1.20}"
-POSTGRES_PORT="${POSTGRES_PORT:-30432}"
+POSTGRES_HOST="${POSTGRES_HOST:-postgres-rw.db.aegis-hq.xyz}"
+POSTGRES_PORT="${POSTGRES_PORT:-5432}"
 POSTGRES_USER="${POSTGRES_USER:-raguser}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
 POSTGRES_DB="${POSTGRES_DB:-ragdb}"
@@ -180,7 +180,7 @@ EOF
     if [[ "$MCP_STATUS" == "NOT CONFIGURED" ]]; then
         echo "WARNING: MCP RAG server not configured"
         echo "  - RAG tools will not be available"
-        echo "  - Check: ~/claude/personal/localhost/mcp/rag-server/"
+        echo "  - Check: ~/arbiter/personal/localhost/mcp/rag-server/"
     fi
 
     echo "</system-reminder>"

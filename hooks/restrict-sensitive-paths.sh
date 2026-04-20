@@ -58,16 +58,8 @@ for name in "${!BLOCKED_PATHS[@]}"; do
     blocked_path="${BLOCKED_PATHS[$name]}"
     if [[ "$NORMALIZED_PATH" == "$blocked_path"* ]]; then
         echo "[$(date -Iseconds)] BLOCKED: Write to sensitive path ($name): $FILE_PATH" >> "$LOG_FILE"
-        cat >&2 << EOF
-BLOCKED: Cannot write to sensitive path.
-
-Path: $FILE_PATH
-Category: $name
-Reason: This directory contains security-critical files.
-
-If you need to modify these files, do it manually outside Claude Code.
-EOF
-        exit 2
+        echo "{\"decision\": \"block\", \"reason\": \"BLOCKED: Cannot write to sensitive path ($name): $FILE_PATH\"}"
+        exit 0
     fi
 done
 
@@ -76,16 +68,8 @@ BASENAME=$(basename "$FILE_PATH")
 for pattern in "${BLOCKED_PATTERNS[@]}"; do
     if echo "$BASENAME" | grep -qE "$pattern" 2>/dev/null; then
         echo "[$(date -Iseconds)] BLOCKED: Write to sensitive file pattern ($pattern): $FILE_PATH" >> "$LOG_FILE"
-        cat >&2 << EOF
-BLOCKED: Cannot write to sensitive file type.
-
-Path: $FILE_PATH
-Pattern: $pattern
-Reason: This file type typically contains secrets or credentials.
-
-If you need to create/modify this file, do it manually outside Claude Code.
-EOF
-        exit 2
+        echo "{\"decision\": \"block\", \"reason\": \"BLOCKED: Cannot write to sensitive file type ($pattern): $FILE_PATH\"}"
+        exit 0
     fi
 done
 
