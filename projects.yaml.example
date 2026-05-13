@@ -1,0 +1,58 @@
+# Claude Code Project Registry — Template
+#
+# Copy to ~/.claude/projects.yaml and customize per operator.
+# Maps project names + aliases to filesystem paths and (optionally) the
+# infrastructure they're tied to (kubeconfig, kube-context, etc.).
+# Referenced by the auto-project-context hook and MCP tooling.
+
+projects:
+  # =============================================================================
+  # EXAMPLE — replace these with your own projects.
+  # =============================================================================
+
+  # Generic application project — minimal required fields
+  my-app:
+    path: ~/Development/my-app
+    context: ~/Development/my-app/CLAUDE.md
+    aliases: [app, my]
+    company: personal          # one of your configured org tags
+    type: application
+
+  # Kubernetes-deployed project — adds kubeconfig + context
+  my-cluster:
+    path: ~/Development/my-cluster
+    context: ~/Development/my-cluster/CLAUDE.md
+    aliases: [k8s, cluster]
+    company: personal
+    type: kubernetes
+    kubeconfig: ~/.kube/config
+    kube_context: my-cluster-context
+
+  # Platform/SaaS integration — type is descriptive only
+  my-platform:
+    path: ~/Development/my-platform-integration
+    context: ~/Development/my-platform-integration/CLAUDE.md
+    aliases: [platform]
+    company: personal
+    type: platform
+
+# =============================================================================
+# Field reference:
+# =============================================================================
+#
+#   path           : absolute path to the project root (~ allowed)
+#   context        : path to the project's CLAUDE.md (loaded by hooks)
+#   aliases        : list of short names auto-resolved to this project
+#   company        : org/tenant tag — must match a configured company value
+#                    in your RAG / hook configuration (e.g., empire, coldforge,
+#                    personal). Used for RAG search filtering.
+#   type           : descriptive label (kubernetes / platform / application /
+#                    data-warehouse / etc.) — no behavior tied to it, just
+#                    documentation.
+#   kubeconfig     : (optional) path to kubeconfig for kubernetes-type projects
+#   kube_context   : (optional) which context within that kubeconfig to use
+
+settings:
+  fuzzy_threshold: 0.6      # match threshold for alias resolution
+  auto_load_context: true   # auto-load CLAUDE.md on project switch
+  show_status_on_switch: true

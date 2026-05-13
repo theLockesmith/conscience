@@ -1,0 +1,111 @@
+{
+  "_comment": "Claude Code settings template. Copy to ~/.claude/settings.json and replace $HOME with the operator's home dir if literal expansion is needed. The hook commands all route through a single dispatcher; the dispatcher reads hooks.yaml at runtime so changes hot-reload without re-registering here.",
+
+  "env": {
+    "CLAUDE_CODE_SUBAGENT_MODEL": "claude-sonnet-4-20250514",
+    "ENABLE_TOOL_SEARCH": "auto:5"
+  },
+
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=UserPromptSubmit $HOME/.claude/hooks/dispatcher.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=PreToolUse $HOME/.claude/hooks/dispatcher.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=PostToolUse $HOME/.claude/hooks/dispatcher.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=Stop $HOME/.claude/hooks/dispatcher.sh"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=SubagentStop $HOME/.claude/hooks/dispatcher.sh"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=PreCompact $HOME/.claude/hooks/dispatcher.sh"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "new",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=SessionStart CLAUDE_SESSION_TYPE=new $HOME/.claude/hooks/dispatcher.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=SessionStart CLAUDE_SESSION_TYPE=compact $HOME/.claude/hooks/dispatcher.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_TYPE=SessionStart CLAUDE_SESSION_TYPE=resume $HOME/.claude/hooks/dispatcher.sh"
+          }
+        ]
+      }
+    ]
+  },
+
+  "statusLine": {
+    "type": "command",
+    "command": "$HOME/.claude/hooks/statusline-context-monitor.sh"
+  },
+
+  "enabledPlugins": {},
+
+  "alwaysThinkingEnabled": true,
+
+  "skipDangerousModePermissionPrompt": false
+}
