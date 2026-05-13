@@ -1,36 +1,27 @@
 #!/bin/bash
-# Pre-Compaction Extractor - Extracts decisions/learnings from ENTIRE session before compaction
+# Pre-Compaction Extractor - Extracts decisions/learnings AND creates checkpoint before compaction
 # Hook: PreCompact
 #
-# Unlike context-extractor.sh (Stop hook), this runs ONCE before compaction and
-# processes the entire session transcript, not just individual responses.
+# Unlike context-extractor.sh (Stop hook), this runs ONCE before compaction and:
+# 1. Creates a session checkpoint (todos, key files, context) for recovery
+# 2. Extracts decisions/learnings from the session transcript
+#
+# The checkpoint enables restoring session state after compaction via restore_checkpoint MCP tool.
 
 set -uo pipefail
 
 LOG_FILE="/tmp/pre-compaction-extractor.log"
 echo "[$(date -Iseconds)] PreCompact hook invoked" >> "$LOG_FILE"
 
-# Configuration
-OLLAMA_URL="${OLLAMA_URL:-http://10.0.4.10:11434}"
-OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5-coder:7b}"
+# Configuration - LocalAI for LLM, Ollama for embeddings
+LOCALAI_URL="${LOCALAI_URL:-http://10.0.4.10:8000}"
+LOCALAI_MODEL="${LOCALAI_MODEL:-qwen2.5-coder-7b}"
 POSTGRES_HOST="${POSTGRES_HOST:-postgres-rw.db.aegis-hq.xyz}"
 POSTGRES_PORT="${POSTGRES_PORT:-5432}"
 POSTGRES_DB="${POSTGRES_DB:-ragdb}"
 POSTGRES_USER="${POSTGRES_USER:-rag}"
-POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
-
-# Get password from MCP config if not set
-if [[ -z "$POSTGRES_PASSWORD" ]]; then
-    MCP_CONFIG="$HOME/claude/personal/localhost/.mcp.json"
-    if [[ -f "$MCP_CONFIG" ]]; then
-        POSTGRES_PASSWORD=$(jq -r '.mcpServers.rag.env.POSTGRES_PASSWORD // empty' "$MCP_CONFIG" 2>/dev/null)
-    fi
-fi
-
-if [[ -z "$POSTGRES_PASSWORD" ]]; then
-    echo "[$(date -Iseconds)] No PostgreSQL password, exiting" >> "$LOG_FILE"
-    exit 0
-fi
+# Password from environment or fallback (same as coord-session-register.sh)
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-***REDACTED-cred-rotated-2026-05-13***}"
 
 # Read input from stdin (PreCompact provides trigger and custom_instructions)
 INPUT=$(cat)
@@ -43,6 +34,36 @@ if [[ -z "$TRANSCRIPT_PATH" ]] || [[ ! -f "$TRANSCRIPT_PATH" ]]; then
     echo "[$(date -Iseconds)] No transcript file found" >> "$LOG_FILE"
     exit 0
 fi
+
+# ============================================================================
+# PHASE 1: Create Session Checkpoint (via unified script)
+# ============================================================================
+
+# Extract session_id from input or transcript filename
+SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+if [[ -z "$SESSION_ID" ]]; then
+    SESSION_ID=$(basename "$TRANSCRIPT_PATH" .jsonl)
+fi
+
+echo "[$(date -Iseconds)] Creating pre-compaction checkpoint for session: $SESSION_ID" >> "$LOG_FILE"
+
+# Use unified checkpoint script (extracts todos, key files, context from transcript)
+CHECKPOINT_ID=$("$HOME/.claude/scripts/unified-checkpoint.sh" \
+    --transcript "$TRANSCRIPT_PATH" \
+    --session-id "$SESSION_ID" \
+    --description "Pre-compaction checkpoint" \
+    --trigger "precompact" \
+    2>/dev/null)
+
+if [[ -n "$CHECKPOINT_ID" && "$CHECKPOINT_ID" =~ ^[0-9a-f-]{36}$ ]]; then
+    echo "[$(date -Iseconds)] Checkpoint created: $CHECKPOINT_ID" >> "$LOG_FILE"
+else
+    echo "[$(date -Iseconds)] Checkpoint creation failed or skipped" >> "$LOG_FILE"
+fi
+
+# ============================================================================
+# PHASE 2: Extract Decisions and Learnings (existing logic)
+# ============================================================================
 
 # Extract assistant messages from transcript (last 50 to keep prompt manageable)
 # The transcript is JSONL format with message objects
@@ -98,39 +119,36 @@ Session transcript to analyze:
 PROMPT_END
 )
 
-# Call Ollama for extraction (120s timeout for larger extraction)
-echo "[$(date -Iseconds)] Calling Ollama..." >> "$LOG_FILE"
-OLLAMA_RESPONSE=$(curl -s --max-time 120 "$OLLAMA_URL/api/generate" \
+# Call LocalAI for extraction (120s timeout for larger extraction)
+echo "[$(date -Iseconds)] Calling LocalAI..." >> "$LOG_FILE"
+LOCALAI_RESPONSE=$(curl -s --max-time 120 "$LOCALAI_URL/v1/chat/completions" \
     -H "Content-Type: application/json" \
-    -d "$(jq -n --arg model "$OLLAMA_MODEL" --arg prompt "$EXTRACTION_PROMPT
+    -d "$(jq -n --arg model "$LOCALAI_MODEL" --arg prompt "$EXTRACTION_PROMPT
 
 $ASSISTANT_MESSAGES" '{
         model: $model,
-        prompt: $prompt,
-        stream: false,
-        options: {
-            temperature: 0.1,
-            num_predict: 2000
-        }
+        messages: [{role: "user", content: $prompt}],
+        temperature: 0.1,
+        max_tokens: 2000
     }')" 2>&1)
 
 CURL_EXIT=$?
-echo "[$(date -Iseconds)] Curl exit code: $CURL_EXIT, response length: ${#OLLAMA_RESPONSE}" >> "$LOG_FILE"
+echo "[$(date -Iseconds)] Curl exit code: $CURL_EXIT, response length: ${#LOCALAI_RESPONSE}" >> "$LOG_FILE"
 
-if [[ -z "$OLLAMA_RESPONSE" ]]; then
-    echo "[$(date -Iseconds)] Ollama timeout or error" >> "$LOG_FILE"
+if [[ -z "$LOCALAI_RESPONSE" ]]; then
+    echo "[$(date -Iseconds)] LocalAI timeout or error" >> "$LOG_FILE"
     exit 0
 fi
 
-# Extract the response text
-EXTRACTION=$(echo "$OLLAMA_RESPONSE" | jq -r '.response // empty' 2>/dev/null)
+# Extract the response text (OpenAI format)
+EXTRACTION=$(echo "$LOCALAI_RESPONSE" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
 
 if [[ -z "$EXTRACTION" ]]; then
-    echo "[$(date -Iseconds)] No response from Ollama" >> "$LOG_FILE"
+    echo "[$(date -Iseconds)] No response from LocalAI" >> "$LOG_FILE"
     exit 0
 fi
 
-echo "[$(date -Iseconds)] Ollama returned ${#EXTRACTION} chars" >> "$LOG_FILE"
+echo "[$(date -Iseconds)] LocalAI returned ${#EXTRACTION} chars" >> "$LOG_FILE"
 
 # Try to parse JSON from response
 JSON_CONTENT=$(echo "$EXTRACTION" | sed -n '/```json/,/```/p' | sed '1d;$d')

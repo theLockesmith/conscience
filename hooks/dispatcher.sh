@@ -132,33 +132,47 @@ check_matcher() {
         return 0
     fi
 
-    # For SessionStart hooks, match against session type ("new" or "compact")
+    # For SessionStart hooks, match against session source
+    # Claude Code provides: startup, resume, clear, compact
+    # We also support "new" as alias for "startup" for backwards compatibility
     if [[ "$HOOK_TYPE" == "SessionStart" ]]; then
-        local session_type=""
+        local session_source=""
 
-        # First check environment variable (passed from settings.json)
-        session_type="${CLAUDE_SESSION_TYPE:-}"
+        # Primary: check .source field from Claude Code's SessionStart input
+        session_source=$(echo "$INPUT" | jq -r '.source // empty' 2>/dev/null)
 
-        # Fall back to JSON input
-        if [[ -z "$session_type" ]]; then
-            session_type=$(echo "$INPUT" | jq -r '.session_type // .type // empty' 2>/dev/null)
+        # Fallback: check environment variable
+        if [[ -z "$session_source" ]]; then
+            session_source="${CLAUDE_SESSION_TYPE:-}"
         fi
 
-        # Also check for common patterns in the input that indicate session type
-        if [[ -z "$session_type" ]]; then
+        # Fallback: check legacy field names
+        if [[ -z "$session_source" ]]; then
+            session_source=$(echo "$INPUT" | jq -r '.session_type // .type // empty' 2>/dev/null)
+        fi
+
+        # Fallback: check boolean patterns
+        if [[ -z "$session_source" ]]; then
             if echo "$INPUT" | jq -e '.is_new_session == true' >/dev/null 2>&1; then
-                session_type="new"
+                session_source="startup"
             elif echo "$INPUT" | jq -e '.is_compact == true or .compacted == true' >/dev/null 2>&1; then
-                session_type="compact"
+                session_source="compact"
             fi
         fi
 
-        # Match session type against matcher
-        if [[ -n "$session_type" ]] && [[ "$session_type" == "$matcher" ]]; then
-            return 0
+        # Match against matcher (handle "new" as alias for "startup")
+        if [[ -n "$session_source" ]]; then
+            # Direct match
+            if [[ "$session_source" == "$matcher" ]]; then
+                return 0
+            fi
+            # "startup" matches "new" matcher (backwards compatibility)
+            if [[ "$session_source" == "startup" ]] && [[ "$matcher" == "new" ]]; then
+                return 0
+            fi
         fi
 
-        # If no session type detected but matcher is specified, don't match
+        # If no session source detected but matcher is specified, don't match
         return 1
     fi
 
@@ -202,7 +216,8 @@ if command -v yq &>/dev/null; then
                 # Block on exit code 2 (hook explicitly blocking)
                 if [[ "$HOOK_EXIT_CODE" -eq 2 ]]; then
                     BLOCK_REASON="${HOOK_RESULT:-Hook blocked execution (exit 2)}"
-                    echo "{\"decision\": \"block\", \"reason\": \"$BLOCK_REASON\"}"
+                    # Output to stderr for Claude Code to display properly
+                    echo "$BLOCK_REASON" >&2
                     log_timing
                     exit 2
                 fi

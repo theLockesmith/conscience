@@ -13,32 +13,20 @@ set -uo pipefail
 # Debug: log that hook was called
 echo "[$(date -Iseconds)] Hook invoked" >> /tmp/context-extractor.log
 
-# Configuration
-OLLAMA_URL="${OLLAMA_URL:-http://10.0.4.10:11434}"
-OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5-coder:7b}"
+# Configuration - LocalAI for LLM, Ollama for embeddings
+LOCALAI_URL="${LOCALAI_URL:-http://10.0.4.10:8000}"
+LOCALAI_MODEL="${LOCALAI_MODEL:-qwen2.5-coder-7b}"
 POSTGRES_HOST="${POSTGRES_HOST:-postgres-rw.db.aegis-hq.xyz}"
 POSTGRES_PORT="${POSTGRES_PORT:-5432}"
 POSTGRES_DB="${POSTGRES_DB:-ragdb}"
 POSTGRES_USER="${POSTGRES_USER:-rag}"
-POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
+# Password from environment or fallback (same as coord-session-register.sh)
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-***REDACTED-cred-rotated-2026-05-13***}"
 
 # Context thresholds
 MIN_USAGE_PERCENT=70  # Only run extraction above this threshold
 MAX_TOKENS=200000
 CHARS_PER_TOKEN=5     # Rough estimate for JSON transcript
-
-# Skip if no password configured
-if [[ -z "$POSTGRES_PASSWORD" ]]; then
-    # Try to read from MCP config
-    MCP_CONFIG="$HOME/claude/personal/localhost/.mcp.json"
-    if [[ -f "$MCP_CONFIG" ]]; then
-        POSTGRES_PASSWORD=$(jq -r '.mcpServers.rag.env.POSTGRES_PASSWORD // empty' "$MCP_CONFIG" 2>/dev/null)
-    fi
-fi
-
-if [[ -z "$POSTGRES_PASSWORD" ]]; then
-    exit 0  # Silent exit if no credentials
-fi
 
 # ============================================================================
 # CHECK CONTEXT USAGE - Only proceed if above threshold
@@ -155,31 +143,28 @@ Response to analyze:
 PROMPT_END
 )
 
-# Call Ollama for extraction (60s timeout - model loading can take 20s+)
-OLLAMA_RESPONSE=$(curl -s --max-time 60 "$OLLAMA_URL/api/generate" \
+# Call LocalAI for extraction (60s timeout - model loading can take 20s+)
+LOCALAI_RESPONSE=$(curl -s --max-time 60 "$LOCALAI_URL/v1/chat/completions" \
     -H "Content-Type: application/json" \
-    -d "$(jq -n --arg model "$OLLAMA_MODEL" --arg prompt "$EXTRACTION_PROMPT
+    -d "$(jq -n --arg model "$LOCALAI_MODEL" --arg prompt "$EXTRACTION_PROMPT
 
 $RESPONSE_TRUNCATED" '{
         model: $model,
-        prompt: $prompt,
-        stream: false,
-        options: {
-            temperature: 0.1,
-            num_predict: 1000
-        }
+        messages: [{role: "user", content: $prompt}],
+        temperature: 0.1,
+        max_tokens: 1000
     }')" 2>/dev/null)
 
-if [[ -z "$OLLAMA_RESPONSE" ]]; then
-    echo "[$(date -Iseconds)] Skipped: Ollama timeout or error" >> /tmp/context-extractor.log
+if [[ -z "$LOCALAI_RESPONSE" ]]; then
+    echo "[$(date -Iseconds)] Skipped: LocalAI timeout or error" >> /tmp/context-extractor.log
     exit 0
 fi
 
-# Extract the response text
-EXTRACTION=$(echo "$OLLAMA_RESPONSE" | jq -r '.response // empty' 2>/dev/null)
+# Extract the response text (OpenAI format)
+EXTRACTION=$(echo "$LOCALAI_RESPONSE" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
 
 if [[ -z "$EXTRACTION" ]]; then
-    echo "[$(date -Iseconds)] Skipped: no response field in Ollama output" >> /tmp/context-extractor.log
+    echo "[$(date -Iseconds)] Skipped: no response in LocalAI output" >> /tmp/context-extractor.log
     exit 0
 fi
 

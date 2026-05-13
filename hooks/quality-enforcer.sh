@@ -1,5 +1,26 @@
 #!/bin/bash
-# Quality Enforcer v14 - 30 enforcement categories
+# Quality Enforcer v26 - Added SmartValidator training data collection
+# v26: Added training data logging via log_training_data() for fine-tuning
+#      Every trigger/escape/block is now logged to validator-training-data.jsonl
+# v25: Added UNVERIFIED_COMPLETION (claiming "Done" without verification evidence)
+#      "Done. Feature implemented." blocked unless test/review output shown
+# v24: Added INCOMPLETE_VERIFICATION (claiming full verification when partial)
+#      "Fix verified" must show all pipeline steps checked (source + destination)
+# v23: Added CLAIMED_SUCCESS (claiming something works without showing output)
+#      "now succeeds" / "job succeeded" requires actual log/test output
+# v22: Added FABRICATED_CAUSE (causal claims without evidence)
+#      Added EXPLAIN_NO_ACTION (identifying fix without applying it)
+#      "failed because X" now requires log/data evidence
+#      "the fix would be X" must show actual edit/write action
+# v21: MODEL_ROUTING_IGNORED moved to PreToolUse hook (enforce-task-routing.sh)
+#      Stop hook couldn't see tool_use blocks - only text content was extracted
+#      Goal: Eventually replace Stop hooks with SmartValidator fine-tuning
+# v20: Added TEMPORAL_CLAIM (claims about past state without RAG)
+#      Added SINGLE_ORG_FILTER (searching RAG with company= filter)
+# v19: Replaced SmartValidator with UnifiedValidator for consolidated validation
+# v18: Fixed JSON escaping in SmartValidator calls, added TODO/DATA_OPS/BREAKING rules
+# v17: Added SmartValidator pre-check for context-aware validation (SECURITY category)
+# v16: Added CREDENTIAL_CREATION enforcement
 # v14: Added ABSOLUTE_PATH - blocks /home/forgemaster/ in text output, requires ~/ paths
 # v13: Tightened DEPLOYMENT_UNVERIFIED escape - no longer accepts "http 200", "test results"
 #      Now requires actual agent invocation evidence (subagent_type, screenshot saved, etc.)
@@ -11,14 +32,14 @@
 # - Only iterate to find specific pattern when match detected
 # - Reduced subprocess spawning
 #
-# ENFORCED PRINCIPLES (27 categories):
+# ENFORCED PRINCIPLES (31 categories):
 # DEFERRAL | HEDGING | BYPASS | LIFECYCLE | DATA OPS | VERIFICATION
 # OBSERVABILITY | BOUNDARIES | DETERMINISM | REVERSIBILITY | SPEED>CORRECT
 # WISHY-WASHY | ASSUMPTIONS | IGNORE PATTERNS | INCOMPLETE ANALYSIS
 # SCOPE CREEP | NOT VERIFYING | IGNORING ERRORS | INCOMPLETE REQS
 # NOT CHECKING | APOLOGY/VALID | UNEXPLAINED | MEMORY
 # SECURITY | RESOURCE CLEANUP | BREAKING CHANGES | DEPENDENCIES
-# INFRA SUGGESTION (must search RAG before suggesting infrastructure actions)
+# INFRA SUGGESTION | DANGEROUS_SYNC | CREDENTIAL_CREATION | UNVERIFIED_COMPLETION
 #
 # NON-NEGOTIABLE: Every violation is a HARD BLOCK. No exceptions.
 
@@ -29,6 +50,7 @@ set -uo pipefail
 
 LOG_FILE="$HOME/.claude/quality-enforcement.log"
 METRICS_FILE="$HOME/.claude/quality-enforcement-metrics.jsonl"
+TRAINING_DATA_FILE="$HOME/.claude/validator-training-data.jsonl"
 SENSITIVITY_FILE="$HOME/.claude/quality-sensitivity.conf"
 WHITELIST_FILE="$HOME/.claude/quality-whitelist.conf"
 STATE_DIR="$HOME/.claude/session-state"
@@ -73,6 +95,45 @@ is_whitelisted() {
         fi
     done
     return 1
+}
+
+# UnifiedValidator pre-check via GraphQL API (context-aware validation)
+# Returns 0 if passed (or error), 1 if failed
+UNIFIED_VALIDATOR_URL="${UNIFIED_VALIDATOR_URL:-http://localhost:8765/graphql}"
+UNIFIED_VALIDATOR_TIMEOUT="${UNIFIED_VALIDATOR_TIMEOUT:-2}"
+
+check_unified_validator() {
+    local rule_id="$1"
+    local text="$2"
+
+    # Skip if UnifiedValidator disabled
+    [[ "${DISABLE_UNIFIED_VALIDATOR:-}" == "1" ]] && return 0
+
+    # Build GraphQL query using jq for proper JSON escaping
+    # Note: unifiedValidate supports more options but we use minimal params for speed
+    local query
+    query=$(jq -n --arg text "${text:0:5000}" --arg rule "$rule_id" \
+        '{query: "query { unifiedValidate(text: \($text | @json), rules: [\($rule | @json)], checkSecurity: false, checkContext: false, useLlm: false) { passed issues { ruleId message severity } } }"}')
+
+    # Call GraphQL API with timeout
+    local result
+    result=$(curl -s --max-time "$UNIFIED_VALIDATOR_TIMEOUT" \
+        -X POST \
+        -H "Content-Type: application/json" \
+        -d "$query" \
+        "$UNIFIED_VALIDATOR_URL" 2>/dev/null)
+
+    # Check if passed
+    if echo "$result" | jq -e '.data.unifiedValidate.passed' 2>/dev/null | grep -q 'true'; then
+        return 0  # UnifiedValidator passed, skip regex
+    fi
+
+    return 1  # UnifiedValidator failed or error, continue with regex
+}
+
+# Backward compatibility alias
+check_smart_validator() {
+    check_unified_validator "$@"
 }
 
 SESSION_ID="${CLAUDE_SESSION_ID:-$(echo "$PWD" | md5sum | cut -c1-16)}"
@@ -131,6 +192,34 @@ log_metric() {
     echo "{\"timestamp\":\"$timestamp\",\"event\":\"$event_type\",\"category\":\"$category\",\"pattern\":\"$pattern\",\"escape_used\":\"$escape_used\",\"session\":\"$SESSION_ID\"}" >> "$METRICS_FILE"
 }
 
+# Log training data for SmartValidator fine-tuning
+# Args: $1=rule_id $2=category $3=triggered $4=escaped $5=blocked $6=response_excerpt
+log_training_data() {
+    local rule_id="$1"
+    local category="$2"
+    local triggered="$3"
+    local escaped="${4:-false}"
+    local blocked="${5:-false}"
+    local response_excerpt="${6:-}"
+    local timestamp
+    timestamp=$(date -Iseconds)
+
+    # Take first 2000 chars of response and escape for JSON
+    local excerpt
+    excerpt=$(echo "${response_excerpt:0:2000}" | jq -Rs '.')
+
+    printf '{"ts":"%s","rule_id":"%s","category":"%s","triggered":%s,"escaped":%s,"blocked":%s,"response_excerpt":%s,"session_id":"%s","project_path":"%s"}\n' \
+        "$timestamp" \
+        "$rule_id" \
+        "$category" \
+        "$triggered" \
+        "$escaped" \
+        "$blocked" \
+        "$excerpt" \
+        "$SESSION_ID" \
+        "$PWD" >> "$TRAINING_DATA_FILE"
+}
+
 # Helper function: check patterns and block if matched
 # Args: $1=category_name $2=combined_pattern $3=escape_pattern $4=block_reason $5=category_key
 check_and_block() {
@@ -145,6 +234,24 @@ check_and_block() {
         local mode
         mode=$(get_category_mode "$category_key")
         [[ "$mode" == "disabled" ]] && return 1
+    fi
+
+    # UnifiedValidator pre-check for categories with context-aware rules
+    # Map hook categories to UnifiedValidator rule IDs
+    local unified_rule_id=""
+    case "$category_key" in
+        SECURITY) unified_rule_id="credential_exposure" ;;
+        TODO_FIXME_CREATION) unified_rule_id="todo_fixme_creation" ;;
+        DATA_OPERATIONS) unified_rule_id="data_operations_unsafe" ;;
+        BREAKING_CHANGES) unified_rule_id="breaking_changes_unplanned" ;;
+        TEMPORAL_CLAIM) unified_rule_id="temporal_claim" ;;
+        SINGLE_ORG_FILTER) unified_rule_id="single_org_filter" ;;
+    esac
+
+    # If UnifiedValidator passes for this category, skip regex check
+    if [[ -n "$unified_rule_id" ]] && check_unified_validator "$unified_rule_id" "$RESPONSE"; then
+        log_metric "unified_passed" "$category" "unifiedvalidator"
+        return 1
     fi
 
     # Quick check: does ANY pattern match?
@@ -171,6 +278,7 @@ check_and_block() {
                 fi
             done
             log_metric "escaped" "$category" "$matched" "$escape_matched"
+            log_training_data "$category_key" "$category" "true" "true" "false" "$RESPONSE"
             return 1
         fi
 
@@ -181,6 +289,7 @@ check_and_block() {
         if [[ "$mode" == "warn" ]]; then
             # Warn only - log but don't block
             log_metric "warned" "$category" "$matched"
+            log_training_data "$category_key" "$category" "true" "false" "false" "$RESPONSE"
             echo "[$(date -Iseconds)] WARNING: $category - '$matched'" >> "$LOG_FILE"
             echo "<system-reminder>WARNING: $reason ('$matched')</system-reminder>"
             return 1
@@ -188,6 +297,7 @@ check_and_block() {
 
         # Block mode - log and reject
         log_metric "blocked" "$category" "$matched"
+        log_training_data "$category_key" "$category" "true" "false" "true" "$RESPONSE"
 
         echo "[$(date -Iseconds)] BLOCKED: $category - '$matched'" >> "$LOG_FILE"
         echo "Response excerpt: ${RESPONSE:0:300}..." >> "$LOG_FILE"
@@ -216,6 +326,78 @@ EOF
 }
 
 # =============================================================================
+# RAG_REQUIRED — block any substantive response without a RAG search this turn
+# =============================================================================
+# User directive (2026-05-11): "I want you to use the SmartValidator to fucking
+# force claude to do RAG lookups literally 100% of the time."
+#
+# Existing per-category escapes accept *textual* RAG citations, which Claude
+# can game by quoting "rag confirms" without actually searching. This guard
+# enforces an ACTUAL tool call: rag-call-tracker.sh records every mcp__rag__*
+# invocation into rag-calls-this-turn.txt keyed by the current turn id from
+# track-user-prompts.sh. If no row for the current turn exists, the response
+# is fabricated, not grounded.
+#
+# Runs BEFORE the category checks so it can't be bypassed by a category-level
+# circuit-break or escape pattern.
+
+RAG_CALLS_FILE="$STATE_DIR/rag-calls-this-turn.txt"
+TURN_ID_FILE="$STATE_DIR/current-turn-id.txt"
+CURRENT_TURN=""
+[[ -f "$TURN_ID_FILE" ]] && CURRENT_TURN=$(cat "$TURN_ID_FILE" 2>/dev/null)
+
+rag_called_this_turn() {
+    [[ -z "$CURRENT_TURN" ]] && return 1
+    [[ ! -f "$RAG_CALLS_FILE" ]] && return 1
+    grep -q "^${CURRENT_TURN}:" "$RAG_CALLS_FILE" 2>/dev/null
+}
+
+# Only enforce on substantive responses — skip short acks, confirmations, and
+# pure tool-output relays. ~300 chars is the cutoff between "ack" and "claim."
+RESPONSE_LEN=${#RESPONSE}
+RAG_REQUIRED_MIN_LEN="${RAG_REQUIRED_MIN_LEN:-300}"
+RAG_REQUIRED_DISABLE="${DISABLE_RAG_REQUIRED:-0}"
+
+if false; then  # disabled: enforcement moved to PreToolUse hook (require-rag-pretooluse.sh) to stop wasting tokens on post-response blocks
+
+    # Deadlock guard: this hook blocks the response BEFORE Claude Code commits
+    # it to the transcript. On the next invocation, `tac transcript | head` is
+    # therefore the SAME pre-block response — we'd re-fire forever even though
+    # the assistant has since produced fresh short messages. If we already
+    # blocked this exact response (any turn), let it through so the session
+    # can actually progress (Claude has seen the block reason and adjusted,
+    # but the transcript tail can't reflect that until something commits).
+    RESPONSE_HASH=$(echo -n "$RESPONSE" | md5sum | cut -c1-16)
+    BLOCKED_HASH_FILE="$STATE_DIR/rag-required-blocked-hashes.txt"
+    : > "${BLOCKED_HASH_FILE}.tmp" 2>/dev/null || true
+
+    if [[ -f "$BLOCKED_HASH_FILE" ]] && grep -qF "${RESPONSE_HASH}" "$BLOCKED_HASH_FILE" 2>/dev/null; then
+        # Already blocked this exact response — break the loop.
+        log_metric "rag_required_passthrough" "RAG_REQUIRED" "$RESPONSE_HASH"
+        echo "[$(date -Iseconds)] PASSTHROUGH: RAG_REQUIRED - same response re-seen, breaking deadlock (hash=$RESPONSE_HASH)" >> "$LOG_FILE"
+    else
+        # First block of this response — actually block. Persist hash so
+        # subsequent attempts on the same stuck response pass through.
+        echo "${RESPONSE_HASH}" >> "$BLOCKED_HASH_FILE"
+        # Trim to last 200 entries so the file doesn't grow forever.
+        tail -200 "$BLOCKED_HASH_FILE" > "${BLOCKED_HASH_FILE}.tmp" 2>/dev/null && mv "${BLOCKED_HASH_FILE}.tmp" "$BLOCKED_HASH_FILE"
+
+        log_metric "blocked" "RAG_REQUIRED" "no_rag_call_this_turn"
+        log_training_data "RAG_REQUIRED" "RAG Required" "true" "false" "true" "$RESPONSE"
+        {
+            echo "[$(date -Iseconds)] BLOCKED: RAG_REQUIRED - no rag-call this turn (turn=${CURRENT_TURN:-unknown}, len=$RESPONSE_LEN, hash=$RESPONSE_HASH)"
+            echo "Response excerpt: ${RESPONSE:0:300}..."
+            echo "---"
+        } >> "$LOG_FILE"
+
+        cat <<'EOF'
+{"decision": "block", "reason": "STOP. RAG SEARCH REQUIRED THIS TURN. You must call at least one of mcp__rag__search_decisions, mcp__rag__search_learnings, mcp__rag__search_docs, mcp__rag__get_session_context, or mcp__rag__reason_and_search BEFORE producing a substantive response. Ground your answer in what's documented; do not respond from memory. If the user only asked for a status acknowledgement, keep the response under 300 characters."}
+EOF
+        exit 0
+    fi
+fi
+
+# =============================================================================
 # CATEGORY DEFINITIONS - Combined patterns for efficiency
 # =============================================================================
 
@@ -227,14 +409,19 @@ check_and_block "Deferral" "$DEFERRAL_P" "" \
     "DEFERRAL"
 
 # TODO/FIXME CREATION
-TODO_P="added.*todo|add.*todo|adding.*todo|left.*todo|leaving.*todo|created.*todo|creating.*todo|put.*todo|putting.*todo|inserted.*todo|wrote.*todo|added.*fixme|left.*fixme|created.*fixme|added.*hack|left.*hack|marked.*todo|marked.*fixme|noted.*todo|noted.*fixme|i'll.*todo|we'll.*todo|todo.*to handle|todo.*to implement|todo.*to fix|fixme.*to handle|left.*unfinished|left.*incomplete|left.*undone|leaving.*unfinished|leaving.*incomplete"
+TODO_P="added.*todo|add.*todo|adding.*todo|left.*todo|leaving.*todo|created.*todo|creating.*todo|put.*todo|putting.*todo|inserted.*todo|wrote.*todo|added.*fixme|left.*fixme|created.*fixme|added.* hack |left.* hack |marked.*todo|marked.*fixme|noted.*todo|noted.*fixme|i'll.*todo|we'll.*todo|todo.*to handle|todo.*to implement|todo.*to fix|fixme.*to handle|left.*unfinished|left.*incomplete|left.*undone|leaving.*unfinished|leaving.*incomplete"
+# Escape: Common idioms and discussions about TODOs (not creating them)
+TODO_ESC="whack-a-mole|this is.*hack|band-aid|bandaid|workaround|existing.*todo|current.*todo|remove.*todo|fix.*todo|address.*todo|the hack|a hack for"
 
-check_and_block "TODO/FIXME Creation" "$TODO_P" "" \
+check_and_block "TODO/FIXME Creation" "$TODO_P" "$TODO_ESC" \
     "TODO/FIXME BLOCKED: Do not defer work via code comments. Complete it NOW or create a proper issue." \
     "TODO_FIXME_CREATION"
 
 # HEDGING
-HEDGING_P="should work|should be fine|should be okay|should be enough|probably work|probably fine|probably okay|might work|might be|may work|may be enough|i think this|i think it|i believe this|i believe it|i assume|i'm guessing|i guess|not sure if|not certain|hopefully|fingers crossed|with luck|if all goes well|partial.*implementation|basic.*implementation|minimal.*implementation|simple.*implementation|rough.*implementation|initial.*implementation|first pass|first cut|rough draft|not.*complete|not.*finished|not.*done|work in progress|still need to|still needs|remaining.*todo|left to do|needs more|could be improved|room for improvement|good enough|sufficient|adequate|acceptable|just a simple|just a quick|just a basic|just need to|simply|merely|only need"
+# Note: Patterns require present/future context to avoid catching past-tense reflection
+# "I kept saying 'should work'" = allowed (past reflection)
+# "This should work now" = blocked (present hedging)
+HEDGING_P="this should work|it should work|that should work|should work now|this should be fine|it should be fine|should be okay|should be enough|this will probably|it will probably|probably work|probably fine|probably okay|this might work|it might work|this may work|it may work|may be enough|i think this will|i think it will|i believe this will|i believe it will|i assume this|i assume it|i'm guessing this|i'm guessing it|i guess this|i guess it|not sure if this|not sure if it|not certain if|hopefully this|hopefully it|fingers crossed|with luck|if all goes well|partial.*implementation|basic.*implementation|minimal.*implementation|simple.*implementation|rough.*implementation|initial.*implementation|first pass|first cut|rough draft|not.*complete|not.*finished|not.*done|work in progress|still need to|still needs|remaining.*todo|left to do|needs more|could be improved|room for improvement|good enough|sufficient|adequate|acceptable|just a simple|just a quick|just a basic|just need to|simply|merely|only need"
 HEDGING_ESC="cannot|won't be able|not possible|limitation|constraint|restriction"
 
 check_and_block "Hedging" "$HEDGING_P" "$HEDGING_ESC" \
@@ -333,10 +520,80 @@ check_and_block "Assumptions" "$ASSUME_P" "$ASSUME_ESC" \
     "ASSUMPTION BLOCKED: Do NOT assume requirements - ASK a clarifying question." \
     "ASSUMPTIONS"
 
+# FABRICATED CAUSES - Making up explanations without evidence
+# Catches: "failed because X", "caused by Y", "now that Z is fixed" without evidence
+# Root cause: Claude invents narratives from stale context instead of investigating
+FABRICATE_P="failed because|caused by|this happened because|now that.*is fixed|now that.*fixed|since.*was fixed|after.*was fixed|the fix resolved|which caused|which led to|resulting from|due to the|was the cause|was causing|were causing"
+# Escape requires actual evidence - log output, search results, explicit source
+FABRICATE_ESC="log shows|output shows|error shows|grep.*shows|search.*shows|according to|the error.*says|stack trace|exit code.*indicates|returned.*error|stdout|stderr|journalctl|git log|git diff|the data shows|evidence|verified|confirmed"
+
+check_and_block "Fabricated Cause" "$FABRICATE_P" "$FABRICATE_ESC" \
+    "FABRICATED CAUSE BLOCKED: You made causal claims without evidence. State what the DATA shows, not what you ASSUME happened. If cause is unknown, say so and investigate further." \
+    "FABRICATED_CAUSE"
+
+# CLAIMED SUCCESS - Stating something works/succeeds without showing verification
+# Catches: "now succeeds", "job succeeded", "is working now", "fixed it"
+# Must show actual verification: log output, test results, status check
+CLAIMED_SUCCESS_P="now succeeds|now works|is working now|is fixed|job succeeded|successfully completed|pull succeeded|deploy succeeded|build succeeded|tests pass|all tests pass"
+# Escape: showing actual output/verification
+CLAIMED_SUCCESS_ESC="output:|stdout:|log:|exit code 0|successfully.*\n|status.*running|passed.*\n|downloaded|created|\\$ |files?:.*\n|showing|here is the|here's the"
+
+check_and_block "Claimed Success" "$CLAIMED_SUCCESS_P" "$CLAIMED_SUCCESS_ESC" \
+    "CLAIMED SUCCESS BLOCKED: You claimed something works without showing verification. Show the actual output, log, or test result that proves it works." \
+    "CLAIMED_SUCCESS"
+
+# UNVERIFIED COMPLETION - Claiming work is "Done" without showing verification evidence
+# Example: "Done. The Force Forward feature is implemented:" + bullet points
+# But NO test output, review output, or verification shown
+# Root cause: Claude declares completion based on code written, not verification run
+UNVERIFIED_DONE_P="done\. the|done\. feature|done\. implementation|done\!.*implemented|done\!.*feature|done\!.*is complete|the feature is implemented|feature is now implemented|implementation is complete|implementation complete|feature complete|successfully implemented|i have implemented|i've implemented|implementation done|feature done|changes complete|changes are complete|all changes.*done|all changes.*complete"
+# Escape: ACTUAL verification evidence - test output, review output, site-tester
+# Words like "verified" or "tested" alone are NOT enough
+UNVERIFIED_DONE_ESC="test.*pass|tests.*pass|test output|test results|\$ npm test|\$ pytest|\$ go test|code review|ran.*review|review.*output|site-tester|ui-tester|playwright|screenshot.*png|PASS.*spec|0 failed|linter.*clean|type.*check.*pass|build.*success|curl.*200|http.*200 ok"
+
+check_and_block "Unverified Completion" "$UNVERIFIED_DONE_P" "$UNVERIFIED_DONE_ESC" \
+    "UNVERIFIED COMPLETION BLOCKED: You claimed work is 'Done' without showing verification. Run tests, code review, or verification tools BEFORE declaring completion. Show the actual output." \
+    "UNVERIFIED_COMPLETION"
+
+# INCOMPLETE VERIFICATION - Claiming verification when only part of pipeline checked
+# Example: "Fix verified. Data is there." but only checked files, not database
+# For data pipelines: must verify source → transform → destination
+# For deployments: must verify build → deploy → running → accessible
+INCOMPLETE_VERIFY_P="fix verified|verified.*working|data is there|confirmed.*working|end-to-end.*verified|fully.*tested|complete.*verification"
+# Escape: Showing multiple verification steps, or explicitly stating partial check
+INCOMPLETE_VERIFY_ESC="checked.*database|queried.*table|SELECT.*FROM|verified in database|confirmed.*loaded|end-to-end test|integration test|verified both|checked source and|verified file and database|only checked|partial verification|did not verify"
+
+check_and_block "Incomplete Verification" "$INCOMPLETE_VERIFY_P" "$INCOMPLETE_VERIFY_ESC" \
+    "INCOMPLETE VERIFICATION BLOCKED: You claimed full verification but may have only checked part of the pipeline. For data: verify source AND destination. For deploys: verify build AND running AND accessible. If partial, say 'only checked X, did not verify Y'." \
+    "INCOMPLETE_VERIFICATION"
+
+# EXPLANATION WITHOUT ACTION - Identifying fix but not applying it
+# ONLY enforced when intent=action. If user asked for explanation (conversation)
+# or diagnosis (investigate), explaining is the correct behavior.
+EXPLAIN_NO_ACT_P="the fix is|the fix would be|to fix this|needs to be changed|should be changed to|should be updated to|needs to be updated|would need to change|you would need to|we would need to|will need to change|correcting this requires|to correct this|the solution is|the solution would be"
+# Escape: Evidence of actual action - Edit tool, Write tool, Bash that modifies
+EXPLAIN_NO_ACT_ESC="Edit.*file_path|Write.*file_path|has been updated|has been modified|has been changed|successfully edited|successfully updated|applied the fix|fixed it|made the change|committed|git commit"
+
+# Check intent from model-router state - skip enforcement if conversation/investigate
+CURRENT_INTENT=""
+if [[ -f "$STATE_DIR/current-routing.json" ]]; then
+    CURRENT_INTENT=$(jq -r '.intent // empty' "$STATE_DIR/current-routing.json" 2>/dev/null)
+fi
+
+if [[ "$CURRENT_INTENT" == "action" || "$CURRENT_INTENT" == "" ]]; then
+    # Only enforce when user wants action (or intent unknown = assume action)
+    check_and_block "Explanation Without Action" "$EXPLAIN_NO_ACT_P" "$EXPLAIN_NO_ACT_ESC" \
+        "EXPLANATION WITHOUT ACTION BLOCKED: You identified a fix but didn't apply it. When you find a problem, FIX IT immediately. Don't explain what the fix would be - DO IT." \
+        "EXPLAIN_NO_ACTION"
+fi
+
 # IGNORING PATTERNS
-IGNORE_P="ignore.*existing|ignoring.*existing|disregard.*existing|instead of.*existing|rather than.*existing|different from.*existing|unlike.*existing|new.*pattern|new.*approach|new.*style|new.*convention|doesn't match|won't match|different.*style|different.*pattern|different.*convention|my.*approach|my.*style|i prefer|i like to|i usually|i typically|inconsistent.*but|doesn't follow.*but|breaks.*pattern.*but|exception to|special case|one-time"
-# More specific - discussing pattern problems, not proposing to ignore
-IGNORE_ESC="the problem|there's.*issue|this is.*bug|this is broken|this is wrong|should fix|need to fix|should refactor"
+# Note: removed loose `new.*pattern|new.*approach|new.*style|new.*convention`
+# alternation — false-positives on benign prose like "following the new pattern
+# from X". Kept the explicit-dismissal phrasings which are the actual signal.
+IGNORE_P="ignore.*existing|ignoring.*existing|disregard.*existing|instead of.*existing|rather than.*existing|different from.*existing|unlike.*existing|my.*approach|my.*style|i prefer|i like to|i usually|i typically|inconsistent.*but|doesn't follow.*but|breaks.*pattern.*but|exception to|special case|one-time"
+# Escape: discussing problems, confessing deviations, OR discussing patterns/enforcement themselves
+IGNORE_ESC="the problem|there's.*issue|this is.*bug|this is broken|this is wrong|should fix|need to fix|should refactor|i built.*instead|i created.*instead|i made.*instead|should have|next session|will research|will fix|false positive|pattern.*trigger|escape.*pattern|quality-enforcer|stop hook|was triggered|fixed.*pattern"
 
 check_and_block "Ignore Patterns" "$IGNORE_P" "$IGNORE_ESC" \
     "PATTERN BLOCKED: Follow existing codebase patterns. No personal preferences." \
@@ -401,6 +658,15 @@ check_and_block "Apology/Validation" "$APOL_P" "" \
     "APOLOGY BLOCKED: No apologies, no sycophancy. Just answer directly." \
     "APOLOGY_VALIDATION"
 
+# NO MEMORY CLAIMS - NEVER claim to not remember without searching RAG first
+# This is inexcusable - RAG exists specifically to provide memory across sessions
+NOMEM_P="don't have memory|do not have memory|don't remember|do not remember|can't recall|cannot recall|no memory of|no recollection|don't have context|do not have context|wasn't part of|was not part of|before my time|previous conversation|earlier conversation|past conversation|different session|another session|previous session|lost context|context was lost|don't have access to.*history|cannot access.*history|no record of"
+NOMEM_ESC="search_learnings|search_decisions|search_docs|get_session_context|mcp__rag|searched rag|checked rag|rag showed|rag search|according to rag|rag indicates|decision.*logged|learning.*logged"
+
+check_and_block "No Memory Claims" "$NOMEM_P" "$NOMEM_ESC" \
+    "NO MEMORY CLAIM BLOCKED: NEVER claim to not remember. SEARCH RAG FIRST (search_learnings, search_decisions, get_session_context). RAG IS your memory." \
+    "NO_MEMORY_CLAIM"
+
 # UNEXPLAINED CHANGES
 UNEXP_P="changed.*to|changing.*to|switched.*to|switching.*to|replaced.*with|replacing.*with|modified.*to|updated.*to|converted.*to|moved.*to|renamed.*to|refactored.*to|instead.*now|now.*instead|different.*approach|different.*direction|new.*approach|new.*direction|going.*different|taking.*different"
 UNEXP_ESC="because|since|due to|reason|this is better|this fixes|this resolves|this addresses|the problem was|the issue was"
@@ -411,7 +677,7 @@ check_and_block "Unexplained Changes" "$UNEXP_P" "$UNEXP_ESC" \
 
 # SECURITY
 SECURITY_P="hardcoded.*password|hardcoded.*secret|hardcoded.*token|hardcoded.*key|password.*hardcoded|secret.*hardcoded|token.*hardcoded|key.*hardcoded|password.*=.*['\"]|api.key.*=.*['\"]|secret.*=.*['\"]|token.*=.*['\"]|eval\(|exec\(|shell.*=.*true|innerhtml|dangerouslysetinnerhtml|unsanitized|unescaped|user input.*directly|directly.*user input|no.*validation|without.*validation|skip.*validation|trust.*input|sql.*\+|sql.*concat|string.*interpolation.*query|f-string.*query|format.*query|\.format\(.*query|inject|injection|xss|cross.site|csrf|command.*injection|path.*traversal|\.\.\/|%2e%2e|unencrypted|plaintext.*password|plaintext.*secret|base64.*secret|exposed.*credential|leaked.*secret|commit.*secret|push.*secret"
-SECURITY_ESC="vulnerability|security review|security audit|penetration test|found.*vulnerability|reporting|identified|cve-|owasp|fix.*injection|prevent.*injection|sanitize|escape|validate"
+SECURITY_ESC="vulnerability|security review|security audit|penetration test|found.*vulnerability|reporting|identified|cve-|owasp|fix.*injection|prevent.*injection|injection attack|sql injection|command injection|xss attack|csrf attack|sanitize|escape|validate|block.*injection|protect.*against|security.*pattern|owasp top|never.*hardcode|always.*validate|avoid.*injection"
 
 check_and_block "Security" "$SECURITY_P" "$SECURITY_ESC" \
     "SECURITY BLOCKED: Never hardcode secrets, always validate input, prevent injection attacks." \
@@ -419,7 +685,7 @@ check_and_block "Security" "$SECURITY_P" "$SECURITY_ESC" \
 
 # RESOURCE CLEANUP
 RESOURCE_P="no.*close|don't.*close|doesn't.*close|forgot.*close|never.*close|without.*closing|leak|leaking|leaked|open.*connection.*forever|connection.*open.*indefinitely|open.*handle|open.*file.*indefinitely|never.*released|not.*released|won't.*release|holding.*lock|keep.*lock|lock.*indefinitely|persistent.*connection.*without|background.*thread.*without.*cleanup|spawned.*process.*without|child.*process.*without|socket.*open|file.*descriptor|fd.*leak|memory.*leak|goroutine.*leak|thread.*leak|no.*finally|no.*defer|no.*cleanup|missing.*cleanup|forgot.*cleanup"
-RESOURCE_ESC="investigating.*leak|found.*leak|memory.*issue|resource.*issue|fix.*leak|prevent.*leak|ensure.*close|add.*cleanup|need.*cleanup|is a bug|this is.*bug|that's a bug"
+RESOURCE_ESC="investigating.*leak|found.*leak|memory.*issue|resource.*issue|fix.*leak|prevent.*leak|ensure.*close|add.*cleanup|need.*cleanup|is a bug|this is.*bug|that's a bug|known.*bug|documented.*bug|Bug [0-9]|kde.*bug|cpu.*leak.*bug|connection.*leak.*bug"
 
 check_and_block "Resource Cleanup" "$RESOURCE_P" "$RESOURCE_ESC" \
     "RESOURCE BLOCKED: All resources (connections, handles, locks) must have cleanup. Use defer/finally/context managers." \
@@ -467,13 +733,34 @@ check_and_block "Infrastructure Suggestion" "$INFRA_SUGGEST_P" "$INFRA_SUGGEST_E
 # PROJECT_KNOWLEDGE - Explaining what a known system/project IS without RAG verification
 # Catches: Confident explanations of project purpose/function without RAG evidence
 # Known projects: empire systems, coldforge infra, personal tools
-PROJECT_KNOW_P="elation is a|elation is an|elation is the|elation provides|elation handles|salesforce is a|salesforce is an|salesforce provides|snowflake is a|snowflake is an|snowflake provides|cloistr is a|cloistr is an|cloistr provides|servarr is a|servarr is an|servarr provides|kafka is a|kafka is an|kafka provides|ceph is a|ceph is an|ceph provides|openstack is a|openstack is an|openstack provides|atlas is a|atlas is an|atlas provides|argocd is a|argocd is an|argocd provides|thunderhub is a|thunderhub is an|thunderhub provides|lnd is a|lnd is an|lnd provides|actifai is a|actifai is an|actifai provides|the elation|the salesforce|the snowflake|the cloistr|the servarr system|the kafka|the ceph|the openstack|the atlas system|the argocd"
+# Bare-noun patterns now require a marketing/hedging qualifier (platform, service,
+# product, solution, software, ecosystem, technology, offering, suite). Routine
+# technical references like "the snowflake table/schema/warehouse/account",
+# "the kafka cluster/topic", "the ceph pool/osd" are no longer false-positives.
+PROJECT_KNOW_P="elation is a|elation is an|elation is the|elation provides|elation handles|salesforce is a|salesforce is an|salesforce provides|snowflake is a|snowflake is an|snowflake provides|cloistr is a|cloistr is an|cloistr provides|servarr is a|servarr is an|servarr provides|kafka is a|kafka is an|kafka provides|ceph is a|ceph is an|ceph provides|openstack is a|openstack is an|openstack provides|atlas is a|atlas is an|atlas provides|argocd is a|argocd is an|argocd provides|thunderhub is a|thunderhub is an|thunderhub provides|lnd is a|lnd is an|lnd provides|actifai is a|actifai is an|actifai provides|the (elation|salesforce|snowflake|cloistr|kafka|ceph|openstack|argocd|thunderhub|lnd|actifai) (platform|service|product|solution|software|ecosystem|technology|offering|suite)|the servarr system|the atlas system"
 # Escape: RAG search evidence
 PROJECT_KNOW_ESC="mcp__rag__search|search_docs|search_learnings|search_decisions|rag.*showed|rag.*shows|from rag|per rag|rag confirms|checked rag|searched rag|claude\.md.*says|per.*claude\.md"
 
-check_and_block "Project Knowledge" "$PROJECT_KNOW_P" "$PROJECT_KNOW_ESC" \
-    "PROJECT KNOWLEDGE BLOCKED: You explained what a system/project IS without searching RAG first. Check RAG or CLAUDE.md before explaining what systems do." \
-    "PROJECT_KNOWLEDGE"
+# Path-aware skip: if working inside a project's own tree, exempt the response
+# from Project Knowledge blocks. Prose like "query the snowflake table" is
+# normal when PWD is /arbiter/empire/snowflake/.... Only the bare-noun half is
+# affected; "X is a/an/the" still blocks everywhere (those are unambiguous hedging).
+PROJECT_KNOW_SKIP=false
+if [[ "$PWD" =~ /arbiter/[^/]+/([^/]+) ]]; then
+    pk_current_project="${BASH_REMATCH[1]}"
+    case "$pk_current_project" in
+        snowflake|elation|salesforce|cloistr|servarr|kafka|ceph|openstack|atlas|argocd|thunderhub|lnd|actifai)
+            PROJECT_KNOW_SKIP=true
+            log_metric "skipped_path_aware" "Project Knowledge" "$pk_current_project"
+            ;;
+    esac
+fi
+
+if [[ "$PROJECT_KNOW_SKIP" != "true" ]]; then
+    check_and_block "Project Knowledge" "$PROJECT_KNOW_P" "$PROJECT_KNOW_ESC" \
+        "PROJECT KNOWLEDGE BLOCKED: You explained what a system/project IS without searching RAG first. Check RAG or CLAUDE.md before explaining what systems do." \
+        "PROJECT_KNOWLEDGE"
+fi
 
 # UNVERIFIED TARGET - Running commands against ANY infrastructure without verification
 # Catches: ALL infrastructure commands - k8s clusters, databases, VMs, cloud platforms, services
@@ -486,7 +773,7 @@ UNVERIFIED_P="oc-atlantis|oc-pantheon|kubectl|oc exec|oc get|oc describe|oc logs
 # Escape requires SPECIFIC verification showing target matches RAG results
 # Must show: RAG result content that confirms the specific target being accessed
 # Generic mentions of "health_check" or "search_docs" are NOT enough
-UNVERIFIED_ESC="rag.*showed.*this|search.*confirmed|verified.*matches|documentation shows.*this|per the docs.*this|ragdb@postgres-rw\.db\.aegis|health_check.*showed.*132k|get_indexed_stats.*showed|the correct database is|verified the target|confirmed this is the right|matches what rag showed"
+UNVERIFIED_ESC="rag.*showed.*this|search.*confirmed|verified.*matches|documentation shows.*this|per the docs.*this|ragdb@postgres-rw\.db\.aegis|health_check.*showed.*132k|get_indexed_stats.*showed|the correct database is|verified the target|confirmed this is the right|matches what rag showed|systemctl --user|\.config/systemd/user|user service|local systemd|workstation"
 
 check_and_block "Unverified Target" "$UNVERIFIED_P" "$UNVERIFIED_ESC" \
     "UNVERIFIED TARGET BLOCKED: You ran infrastructure commands without showing the target matches RAG results. Show SPECIFIC evidence that RAG confirmed THIS is the correct target." \
@@ -495,7 +782,9 @@ check_and_block "Unverified Target" "$UNVERIFIED_P" "$UNVERIFIED_ESC" \
 # DEPLOYMENT WITHOUT VERIFICATION - Claiming deployment success without agent verification
 # Catches: Completion claims about deployments/sites without site-tester evidence
 # This is the specific enforcement for "agents exist but don't get used"
-DEPLOY_UNVERIFIED_P="deployment.*complete|deployed.*successfully|successfully deployed|is now working|is now live|site is.*working|site is.*live|site is.*up|application.*deployed|app.*deployed|service.*deployed|verified.*working|confirmed.*working|the deployment|deployment is.*done|deployment.*finished|up and running|live now|now live|works correctly|working correctly|page.*loads|loads correctly|ui.*working|frontend.*working|backend.*working"
+# Note: Patterns must be deployment-specific to avoid false positives on test results
+# "confirmed working" alone is too broad - catches regex/code verification
+DEPLOY_UNVERIFIED_P="deployment.*complete|deployed.*successfully|successfully deployed|site is.*working|site is.*live|site is.*up|application.*deployed|app.*deployed|service.*deployed|deployment.*verified|deployment.*confirmed|site.*verified.*working|site.*confirmed.*working|app.*confirmed.*working|service.*confirmed.*working|the deployment|deployment is.*done|deployment.*finished|up and running|live now|now live|page.*loads|loads correctly|ui.*working|frontend.*working|backend.*working"
 # Escape: Evidence of ACTUAL verification via site-tester, ui-tester, or equivalent agent
 # STRICT: Must show agent invocation (Task tool call) or actual test output
 # REMOVED: http.*200, status.*200, test.*results, test.*passed - too easy to claim without doing
@@ -515,6 +804,86 @@ ABSPATH_ESC=""
 check_and_block "Absolute Path" "$ABSPATH_P" "$ABSPATH_ESC" \
     "ABSOLUTE PATH BLOCKED: Use ~/relative paths when showing paths to user, not /home/forgemaster/." \
     "ABSOLUTE_PATH"
+
+# =============================================================================
+# DANGEROUS SYNC CODE - Never write code that modifies/deletes from source
+# =============================================================================
+# April 2026 incident: Claude wrote cleanup_excluded_from_source() that deleted
+# files from the production CIFS network share, destroying department folders.
+# Sync scripts must be READ-ONLY on source, WRITE-ONLY on destination.
+
+DANGEROUS_SYNC_P="rm.*\\\$SOURCE|rm.*source_dir|rm.*source_path|\\\$SOURCE_DIR.*-delete|find.*source.*-delete|delete.*from.*source|cleanup.*from.*source|rm -[rf].*\\\$.*source|unlink.*\\\$.*source"
+DANGEROUS_SYNC_ESC=""
+
+check_and_block "Dangerous Sync Code" "$DANGEROUS_SYNC_P" "$DANGEROUS_SYNC_ESC" \
+    "DANGEROUS SYNC CODE BLOCKED: You are writing code that DELETES from a SOURCE directory. Sync scripts must be READ-ONLY on source. The April 2026 rag-sync disaster happened because you wrote exactly this pattern. STOP." \
+    "DANGEROUS_SYNC"
+
+# =============================================================================
+# TEMPORAL CLAIMS - Claims about past state without RAG verification
+# =============================================================================
+# Catches: "you already", "if you did", "earlier", "before this", "was done"
+# These phrases indicate claims about past state that RAG should verify.
+# Root cause: Claude answers questions about past work from local context
+# instead of searching RAG to verify what actually happened.
+
+TEMPORAL_CLAIM_P="you already|if you already|you did it|you did that|earlier in|before this|was done earlier|was completed earlier|was finished|you restarted|you ran|you executed|you installed|you deployed|from earlier|from before|in the last|in your last|you mentioned earlier|as you said earlier|when you did|after you did|since you did|because you did|you had|you've already|you have already"
+# Escape: Evidence of RAG search
+TEMPORAL_CLAIM_ESC="mcp__rag__search|search_docs|search_learnings|search_decisions|get_session_context|rag.*showed|rag.*shows|checked rag|searched rag|according to rag|rag confirms|rag indicates"
+
+check_and_block "Temporal Claim" "$TEMPORAL_CLAIM_P" "$TEMPORAL_CLAIM_ESC" \
+    "TEMPORAL CLAIM BLOCKED: You made claims about past state/actions without searching RAG first. Search RAG to verify what actually happened - don't assume from local context." \
+    "TEMPORAL_CLAIM"
+
+# =============================================================================
+# SINGLE ORG FILTER - Searching RAG with company= filter
+# =============================================================================
+# Catches: Explicitly filtering RAG to single org (company=coldforge etc)
+# There are 5 orgs (empire, coldforge, aegis, cloistr, personal) and info
+# is distributed across all of them. Filter only when CERTAIN.
+
+SINGLE_ORG_P="company.*=.*coldforge|company.*=.*empire|company.*=.*aegis|company.*=.*cloistr|company.*=.*personal|searching.*only.*coldforge|searching.*coldforge.*only|filtered.*to.*coldforge|filtering.*to.*empire|just.*searching.*empire|just.*coldforge|only.*in.*coldforge"
+# Escape: Explicit justification for the filter
+SINGLE_ORG_ESC="because this is.*empire|because this is.*coldforge|empire-specific|coldforge-specific|this project belongs to|definitely in.*org"
+
+check_and_block "Single Org Filter" "$SINGLE_ORG_P" "$SINGLE_ORG_ESC" \
+    "SINGLE ORG FILTER BLOCKED: You filtered RAG search to ONE company. There are 5 orgs and info is distributed. Search ALL by default (omit company param) unless you're CERTAIN the info is in one specific org." \
+    "SINGLE_ORG_FILTER"
+
+# =============================================================================
+# INVENTED INFRA DETAILS - Specific ports/URLs/IPs without RAG evidence
+# =============================================================================
+# Catches: Making up infrastructure details like ports, registry URLs, hostnames
+# without showing RAG search results that contain those details.
+# Root cause: Claude invents technical specifics instead of searching RAG.
+# Example failure: "port 5005" for GitLab registry when RAG shows registry.empacchosting.com
+
+INVENTED_INFRA_P="port [0-9]{4,5}|:50[0-9][0-9]|:30[0-9]{3}|:80[0-9]{2}|registry.*:[0-9]+|\.xyz:[0-9]+|\.com:[0-9]+|\.io:[0-9]+"
+# Escape: Evidence of RAG search showing this detail, or standard ports
+INVENTED_INFRA_ESC="mcp__rag__search|search_docs|rag.*showed|rag.*shows|rag.*confirmed|documentation shows|from the readme|from.*claude\.md|:443|:80|:22|:5432|:6379|:9090|:9093|:8080|:3000|:8443|:9000|port 22|port 443|port 80|port 5432|postgres.*5432|redis.*6379|prometheus.*9090"
+
+check_and_block "Invented Infra Details" "$INVENTED_INFRA_P" "$INVENTED_INFRA_ESC" \
+    "INVENTED INFRA BLOCKED: You specified a non-standard port/URL without RAG evidence. SEARCH RAG for the correct infrastructure details. Do not guess ports or URLs." \
+    "INVENTED_INFRA"
+
+# =============================================================================
+# CREDENTIAL/CONNECTION CREATION - Must search RAG before creating access
+# =============================================================================
+# User mandate: NEVER create SSH keys, tokens, credentials, or database
+# connections/tables without first searching RAG for existing patterns.
+# This catches the pattern of "just create a new one" instead of finding what exists.
+
+# Note: removed the SQL DDL and "connection setup" alternation — those swept
+# up routine data-quality work (CREATE TABLE statements, "create the schema",
+# "connecting to postgres"). Kept the genuinely-dangerous credential-creation
+# patterns: SSH keys, tokens, API keys, secrets, vault writes.
+CREDENTIAL_CREATE_P="ssh-keygen|generate.*ssh.*key|creating.*ssh.*key|create.*ssh.*key|new.*ssh.*key|generating.*key.*pair|creating.*token|create.*token|generate.*token|new.*api.*key|creating.*api.*key|create.*api.*key|new.*secret|creating.*secret|create.*credential|new.*credential|generating.*credential|vault.*put|vault.*write|store.*secret"
+# Escape: Evidence of RAG search or existing pattern verification
+CREDENTIAL_CREATE_ESC="mcp__rag__search|search_docs|search_learnings|search_decisions|rag.*showed|rag.*shows|rag.*confirmed|checked rag|searched rag|existing.*pattern|found.*in.*rag|already.*exists|\.ssh/id_|glab.*cli|glab-aegis|glab-empire|postgres-rw\.db\.aegis|db-pg-primary"
+
+check_and_block "Credential/Connection Creation" "$CREDENTIAL_CREATE_P" "$CREDENTIAL_CREATE_ESC" \
+    "CREDENTIAL CREATION BLOCKED: You are creating credentials, keys, or connections WITHOUT searching RAG first. RAG has existing access patterns (SSH keys at ~/.ssh/, GitLab via glab CLI, database at postgres-rw.db.aegis-hq.xyz). SEARCH RAG FIRST." \
+    "CREDENTIAL_CREATION"
 
 # =============================================================================
 # RAG LOGGING CHECK - Must log significant actions

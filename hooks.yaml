@@ -28,6 +28,8 @@ hooks:
   PreToolUse:
     - matcher: "Bash"
       commands:
+        - "/home/forgemaster/.claude/hooks/enforce-user-directives.sh"
+        - "/home/forgemaster/.claude/hooks/block-session-killers.sh"
         - "/home/forgemaster/.claude/hooks/block-destructive.sh"
         - "/home/forgemaster/.claude/hooks/block-secrets.sh"
         - "/home/forgemaster/.claude/hooks/verify-infra-target.sh"
@@ -42,6 +44,19 @@ hooks:
         - "/home/forgemaster/.claude/hooks/block-secrets.sh"
         - "/home/forgemaster/.claude/hooks/read-tracker.sh"
       timeout: 5
+    # Track MCP tool calls (for RAG source validation)
+    - matcher: "mcp__"
+      commands:
+        - "/home/forgemaster/.claude/hooks/verify-infra-target.sh"
+      timeout: 5
+    # FORCE RAG search before any substantive action this turn.
+    # Replaces the Stop-hook RAG_REQUIRED check (which wasted tokens by
+    # blocking a fully-generated response). Blocks BEFORE the tool runs,
+    # cost = a single tool-call round trip, not a whole response.
+    - matcher: "Edit|Write|Bash|Task|NotebookEdit|WebFetch|WebSearch"
+      commands:
+        - "/home/forgemaster/.claude/hooks/require-rag-pretooluse.sh"
+      timeout: 5
     - matcher: "Glob"
       commands:
         - "/home/forgemaster/.claude/hooks/enforce-claude-md.sh"
@@ -52,28 +67,47 @@ hooks:
       timeout: 5
     - matcher: "Task"
       commands:
+        - "/home/forgemaster/.claude/hooks/enforce-task-routing.sh"
         - "/home/forgemaster/.claude/hooks/agent-resource-limits.sh"
         - "/home/forgemaster/.claude/hooks/agent-tracker.sh"
       timeout: 10
     # SHORTCUT BLOCKER - Prevents bypassing existing code paths
     # Created 2026-03-18 after duplicate order incident
     # SENSITIVE PATH RESTRICTION - Blocks writes to ~/.ssh, /etc, .env, etc.
+    # USER DIRECTIVE ENFORCEMENT - HARD BLOCK when user said "don't modify"
+    # GITLAB CI REGISTRY - Blocks unnecessary registry config (GitLab handles it)
+    # INTENT ENFORCEMENT - Blocks modifications when intent="conversation"
     - matcher: "Edit|Write"
       commands:
+        - "/home/forgemaster/.claude/hooks/enforce-intent.sh"
+        - "/home/forgemaster/.claude/hooks/enforce-user-directives.sh"
         - "/home/forgemaster/.claude/hooks/block-shortcuts.sh"
         - "/home/forgemaster/.claude/hooks/restrict-sensitive-paths.sh"
+        - "/home/forgemaster/.claude/hooks/block-gitlab-registry-config.sh"
       timeout: 10
+    # LEARNING CITATION VALIDATION - Requires verified sources for log_learning
+    - matcher: "mcp__rag__log_learning"
+      commands:
+        - "/home/forgemaster/.claude/hooks/validate-learning-source.sh"
+      timeout: 5
   # Response validation (rule enforcement) + context extraction + session hygiene + QUALITY ENFORCEMENT
   # Context extraction only runs when context usage > 70% (checked via transcript file size)
   # Quality enforcer BLOCKS half-assed work, deferrals, and missing RAG logging
   # Block sync runs AFTER quality enforcer to capture any new blocks and persist to RAG
   # QUESTION ANSWERING ENFORCEMENT - Blocks deflection, requires direct answers
+  # WORKFLOW CHECKPOINT - Auto-saves progress every 50 tool calls or 30 minutes
+  # ESCALATION TRACKER - V11: Detects repeated blocks, warns when model isn't self-correcting
+  # RAG GIVEUP ENFORCEMENT - Blocks "can't/not available" unless RAG was searched first
   Stop:
     - commands:
         - "/home/forgemaster/.claude/hooks/enforce-rag-post-compaction.sh"
+        - "/home/forgemaster/.claude/hooks/enforce-rag-before-giveup.sh"
         - "/home/forgemaster/.claude/hooks/enforce-question-answering.sh"
         - "/home/forgemaster/.claude/hooks/quality-enforcer.sh"
-      timeout: 10
+        - "/home/forgemaster/.claude/hooks/escalation-tracker.sh"
+        - "/home/forgemaster/.claude/hooks/pre-completion-verification.sh"
+        - "/home/forgemaster/.claude/hooks/workflow-checkpoint.sh"
+      timeout: 15
   # Pre-compaction extraction - runs BEFORE compaction to save context
   # This is more reliable than Stop hooks which may not fire after compaction
   PreCompact:
@@ -81,14 +115,20 @@ hooks:
         - "/home/forgemaster/.claude/hooks/pre-compaction-extractor.sh"
       timeout: 120
   # Context injection on user prompt + RAG reminders
+  # USER DIRECTIVE TRACKING - Records "don't modify" instructions for enforcement
+  # BUDGET ENFORCEMENT - Warns/blocks when session costs approach limits
   UserPromptSubmit:
     - commands:
+        - "/home/forgemaster/.claude/hooks/budget-enforcer.sh"
+        - "/home/forgemaster/.claude/hooks/track-user-directives.sh"
+        - "/home/forgemaster/.claude/hooks/track-user-prompts.sh"
         - "/home/forgemaster/.claude/hooks/pane-status-update.sh"
         - "/home/forgemaster/.claude/hooks/model-router.sh"
         - "/home/forgemaster/.claude/hooks/auto-project-context.sh"
         - "/home/forgemaster/.claude/hooks/rag-context-reminder.sh"
         - "/home/forgemaster/.claude/hooks/agent-triggers.sh"
         - "/home/forgemaster/.claude/hooks/workflow-detector.sh"
+        - "/home/forgemaster/.claude/hooks/multi-session-context.sh"
       timeout: 10
   # Notification on subagent completion
   SubagentStop:
@@ -107,7 +147,12 @@ hooks:
       commands:
         - "/home/forgemaster/.claude/hooks/sanitize-output.sh"
         - "/home/forgemaster/.claude/hooks/weekly-update-reminder.sh"
+        - "/home/forgemaster/.claude/hooks/session-source-tracker.sh"
       timeout: 10
+    - matcher: "Read"
+      commands:
+        - "/home/forgemaster/.claude/hooks/session-source-tracker.sh"
+      timeout: 5
     # Track RAG logging to verify memory is being used
     - matcher: "mcp__rag__log"
       commands:
@@ -119,23 +164,34 @@ hooks:
         - "/home/forgemaster/.claude/hooks/rag-call-tracker.sh"
       timeout: 5
   # Session start hooks (new session or after compaction)
-  # CRITICAL: session-health-check.sh MUST run first to verify all systems
+  # CRITICAL: validate-hooks.sh MUST run first to fix permissions before other hooks
+  # CRITICAL: session-health-check.sh verifies all systems are available
   # CRITICAL: session-memory-loader.sh loads RAG context so Claude has memory
   SessionStart:
     - matcher: "new"
       commands:
+        - "/home/forgemaster/.claude/hooks/validate-hooks.sh"
         - "/home/forgemaster/.claude/hooks/session-health-check.sh"
         - "/home/forgemaster/.claude/hooks/session-memory-loader.sh"
         - "/home/forgemaster/.claude/hooks/enforce-claude-md-reading.sh"
         - "/home/forgemaster/.claude/hooks/weekly-update-init.sh"
+        - "/home/forgemaster/.claude/hooks/coord-session-register.sh"
       timeout: 30
     - matcher: "compact"
       commands:
+        - "/home/forgemaster/.claude/hooks/validate-hooks.sh"
         - "/home/forgemaster/.claude/hooks/session-health-check.sh"
         - "/home/forgemaster/.claude/hooks/session-memory-loader.sh"
         - "/home/forgemaster/.claude/hooks/compaction-state-tracker.sh"
         - "/home/forgemaster/.claude/hooks/post-compaction-reminder.sh"
         - "/home/forgemaster/.claude/hooks/weekly-update-init.sh"
+        - "/home/forgemaster/.claude/hooks/coord-session-register.sh"
+      timeout: 30
+    - matcher: "resume"
+      commands:
+        - "/home/forgemaster/.claude/hooks/session-health-check.sh"
+        - "/home/forgemaster/.claude/hooks/session-memory-loader.sh"
+        - "/home/forgemaster/.claude/hooks/coord-session-register.sh"
       timeout: 30
 # Settings
 settings:

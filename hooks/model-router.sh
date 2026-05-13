@@ -1,20 +1,36 @@
 #!/bin/bash
-# Model Router - Suggests optimal model tier for subagent invocations
+# Model Router v2.1 - Classifies prompts for model tier AND intent
 # Hook: UserPromptSubmit
 # Location: ~/.claude/hooks/model-router.sh
 #
-# Classifies incoming prompts and suggests which model tier to use
-# for any subagent (Task tool) invocations.
+# Classifies two dimensions:
+# 1. TIER (model complexity): fast/balanced/reasoning/local
+# 2. INTENT (user expectation): action/conversation/investigate/ambiguous
 #
-# Tiers:
-#   haiku  - Simple lookups, status checks, formatting ($1.25/MTok output)
-#   sonnet - Code review, documentation, exploration ($15/MTok output)
-#   opus   - Complex architecture, novel problems, multi-step planning ($75/MTok output)
+# Uses RAG server's classify_prompt MCP tool via GraphQL for tier classification.
+# Falls back to regex patterns if GraphQL unavailable.
+# Intent classification is always regex-based (fast, predictable).
+#
+# Generic Tiers (V12 - Provider Portable):
+#   fast      - Simple lookups, status checks, formatting
+#   balanced  - Code review, documentation, exploration
+#   reasoning - Complex architecture, novel problems, multi-step planning
+#   local     - Simple tasks suitable for local LLMs
+#
+# Legacy aliases (for Anthropic): haiku=fast, sonnet=balanced, opus=reasoning
+#
+# Intents:
+#   action       - User wants changes applied (fix, implement, add, deploy)
+#   conversation - User wants discussion/explanation (why, how, compare, options)
+#   investigate  - User wants diagnosis (check, debug, what's wrong, explore)
+#   ambiguous    - Intent unclear, ask before modifying
 
 set -uo pipefail
 
 ROUTING_LOG="$HOME/.claude/routing-decisions.jsonl"
 WORKFLOW_STATE_DIR="$HOME/.claude/workflow-state"
+GRAPHQL_URL="${RAG_GRAPHQL_URL:-http://127.0.0.1:8765/graphql}"
+TIMEOUT=8  # Timeout for classification (vLLM cold start ~5-6s)
 
 # Read input
 INPUT=$(cat)
@@ -24,6 +40,10 @@ PROMPT=$(echo "$INPUT" | jq -r '.user_prompt // empty' 2>/dev/null)
 if [[ -z "$PROMPT" ]]; then
     PROMPT="$INPUT"
 fi
+
+# Save prompt for intent enforcement (override phrase detection)
+mkdir -p "$HOME/.claude/session-state"
+echo "$PROMPT" > "$HOME/.claude/session-state/last-prompt.txt" 2>/dev/null || true
 
 # Skip very short prompts (likely follow-ups or confirmations)
 if [[ ${#PROMPT} -lt 15 ]]; then
@@ -61,8 +81,7 @@ get_workflow_id() {
     echo ""
 }
 
-# Classification patterns
-# Haiku: Simple, factual, lookup tasks
+# Classification patterns for fallback
 HAIKU_PATTERNS=(
     "^what is "
     "^what does "
@@ -80,16 +99,18 @@ HAIKU_PATTERNS=(
     "^which "
     "^when "
     "^tell me "
-    "^can you "
     "^explain briefly"
     "^quick "
     "^simple "
     "^just "
     "^format "
     "^convert "
+    "^yes$"
+    "^no$"
+    "^ok$"
+    "^continue$"
 )
 
-# Sonnet: Moderate complexity, review, documentation
 SONNET_PATTERNS=(
     "review"
     "document"
@@ -112,7 +133,6 @@ SONNET_PATTERNS=(
     "validate"
 )
 
-# Opus: Complex, multi-step, architectural
 OPUS_PATTERNS=(
     "implement"
     "build"
@@ -136,92 +156,416 @@ OPUS_PATTERNS=(
     "restructure"
 )
 
-# Classification function
-classify_prompt() {
+LOCAL_PATTERNS=(
+    "^run "
+    "^execute "
+    "^start "
+    "^stop "
+    "^restart "
+    "^grep "
+    "^find "
+    "^ls "
+    "^cat "
+    "^read the "
+    "^show file"
+    "^git status"
+    "^git log"
+    "^git diff"
+    "^kubectl get"
+    "^oc get"
+)
+
+# Map internal tier names to generic portable names (V12)
+tier_to_generic() {
+    local tier="$1"
+    case "$tier" in
+        haiku)     echo "fast" ;;
+        sonnet)    echo "balanced" ;;
+        opus)      echo "reasoning" ;;
+        local)     echo "local" ;;
+        # Already generic
+        fast|balanced|reasoning) echo "$tier" ;;
+        *)         echo "$tier" ;;
+    esac
+}
+
+# Map generic names back to Claude-specific (for backward compatibility)
+tier_to_claude() {
+    local tier="$1"
+    case "$tier" in
+        fast)      echo "haiku" ;;
+        balanced)  echo "sonnet" ;;
+        reasoning) echo "opus" ;;
+        local)     echo "local" ;;
+        # Already Claude-specific
+        haiku|sonnet|opus) echo "$tier" ;;
+        *)         echo "$tier" ;;
+    esac
+}
+
+# Intent classification patterns
+# ACTION: User wants something done/changed/built
+ACTION_PATTERNS=(
+    "^fix "
+    "^implement"
+    "^build "
+    "^create "
+    "^add "
+    "^remove "
+    "^delete "
+    "^update "
+    "^change "
+    "^modify "
+    "^apply "
+    "^deploy "
+    "^install "
+    "^configure "
+    "^set up"
+    "^setup "
+    "^enable "
+    "^disable "
+    "^do "
+    "^make "
+    "^write "
+    "^refactor"
+    "^rewrite"
+    "^migrate"
+    "go ahead"
+    "do it"
+    "please fix"
+    "please implement"
+    "please add"
+    "i need you to"
+    "can you fix"
+    "can you implement"
+    "can you add"
+)
+
+# CONVERSATION: User wants discussion/explanation (no changes)
+CONVERSATION_PATTERNS=(
+    "^explain "
+    "^why "
+    "^how does"
+    "^how do "
+    "^what is"
+    "^what are"
+    "^what does"
+    "^what's "
+    "^tell me"
+    "^describe "
+    "^can you explain"
+    "^help me understand"
+    "^i don't understand"
+    "^what would"
+    "^what options"
+    "^options for"
+    "^alternatives"
+    "^pros and cons"
+    "^trade-?offs"
+    "^difference between"
+    "^compare "
+    "^comparison"
+    "^should i"
+    "^should we"
+    "^is it better"
+    "^which is better"
+    "^thoughts on"
+    "^opinion on"
+)
+
+# INVESTIGATE: User wants research/diagnosis (report findings, wait for direction)
+# Includes problem descriptions that don't explicitly ask for action
+INVESTIGATE_PATTERNS=(
+    "^look at"
+    "^look into"
+    "^check "
+    "^what's wrong"
+    "^what went wrong"
+    "^why is.*broken"
+    "^why is.*failing"
+    "^why is.*not working"
+    "^debug "
+    "^diagnose"
+    "^investigate"
+    "^find out"
+    "^figure out"
+    "^trace "
+    "^where is"
+    "^find the"
+    "^search for"
+    "^explore "
+    "^review "
+    "^analyze "
+    "^what happened"
+    "^what's happening"
+    "^status of"
+    "^is.*working"
+    "^is.*running"
+    # Problem descriptions (implicit request to investigate)
+    "keeps crashing"
+    "keeps failing"
+    "is broken"
+    "is failing"
+    "not working"
+    "doesn't work"
+    "won't start"
+    "won't run"
+    "getting.*error"
+    "seeing.*error"
+    "throwing.*error"
+    "returns.*error"
+    "is down"
+    "is slow"
+    "is stuck"
+    "is hanging"
+)
+
+# Intent classification (action vs conversation vs investigate)
+classify_intent_with_regex() {
     local prompt="$1"
-    local classification="sonnet"  # Default
+
+    # Check ACTION patterns first (explicit requests to do something)
+    for pattern in "${ACTION_PATTERNS[@]}"; do
+        if echo "$prompt" | grep -qiE "$pattern"; then
+            echo "action|0.85|matched action pattern: $pattern"
+            return
+        fi
+    done
+
+    # Check CONVERSATION patterns (wants discussion, not changes)
+    for pattern in "${CONVERSATION_PATTERNS[@]}"; do
+        if echo "$prompt" | grep -qiE "$pattern"; then
+            echo "conversation|0.80|matched conversation pattern: $pattern"
+            return
+        fi
+    done
+
+    # Check INVESTIGATE patterns (research/diagnose, report back)
+    for pattern in "${INVESTIGATE_PATTERNS[@]}"; do
+        if echo "$prompt" | grep -qiE "$pattern"; then
+            echo "investigate|0.80|matched investigate pattern: $pattern"
+            return
+        fi
+    done
+
+    # Default: ambiguous - could be either
+    # Short prompts lean toward action, long prompts lean toward conversation
+    local len=${#prompt}
+    if (( len < 30 )); then
+        echo "action|0.50|short prompt, assuming action"
+    elif (( len > 200 )); then
+        echo "conversation|0.50|long prompt, assuming conversation"
+    else
+        echo "ambiguous|0.40|no clear intent signals"
+    fi
+}
+
+# Regex fallback classification
+classify_with_regex() {
+    local prompt="$1"
+    local classification="sonnet"
     local confidence="0.50"
     local reason="default"
 
-    # Check Haiku patterns first (simple tasks)
+    # Check LOCAL patterns first (most specific)
+    for pattern in "${LOCAL_PATTERNS[@]}"; do
+        if echo "$prompt" | grep -qiE "$pattern"; then
+            echo "local|0.80|matched local pattern: $pattern"
+            return
+        fi
+    done
+
+    # Check HAIKU patterns (simple tasks)
     for pattern in "${HAIKU_PATTERNS[@]}"; do
         if echo "$prompt" | grep -qiE "$pattern"; then
-            classification="haiku"
-            confidence="0.75"
-            reason="matched pattern: $pattern"
-            echo "$classification|$confidence|$reason"
+            echo "haiku|0.75|matched haiku pattern: $pattern"
             return
         fi
     done
 
-    # Check Opus patterns (complex tasks)
+    # Check OPUS patterns (complex tasks)
     for pattern in "${OPUS_PATTERNS[@]}"; do
         if echo "$prompt" | grep -qiE "$pattern"; then
-            classification="opus"
-            confidence="0.80"
-            reason="matched pattern: $pattern"
-            echo "$classification|$confidence|$reason"
+            echo "opus|0.80|matched opus pattern: $pattern"
             return
         fi
     done
 
-    # Check Sonnet patterns (moderate tasks)
+    # Check SONNET patterns (moderate complexity)
     for pattern in "${SONNET_PATTERNS[@]}"; do
         if echo "$prompt" | grep -qiE "$pattern"; then
-            classification="sonnet"
-            confidence="0.70"
-            reason="matched pattern: $pattern"
-            echo "$classification|$confidence|$reason"
+            echo "sonnet|0.70|matched sonnet pattern: $pattern"
             return
         fi
     done
 
-    # Length-based heuristic: very short = simple, very long = complex
+    # Length-based heuristic
     local len=${#prompt}
     if (( len < 50 )); then
-        classification="haiku"
-        confidence="0.60"
-        reason="short prompt ($len chars)"
+        echo "haiku|0.60|short prompt ($len chars)"
     elif (( len > 500 )); then
-        classification="opus"
-        confidence="0.65"
-        reason="long detailed prompt ($len chars)"
+        echo "opus|0.65|long detailed prompt ($len chars)"
+    else
+        echo "sonnet|0.50|default (no patterns matched)"
     fi
-
-    echo "$classification|$confidence|$reason"
 }
 
-# Classify the prompt
+# vLLM classification via GraphQL
+classify_with_vllm() {
+    local prompt="$1"
+
+    # Escape special characters for JSON (printf avoids trailing newline)
+    local escaped_prompt
+    escaped_prompt=$(printf '%s' "$prompt" | head -c 2000 | jq -Rs '.')
+
+    # Build JSON payload with proper escaping
+    local json_payload
+    json_payload=$(jq -n --arg p "$prompt" '{
+        query: "{ classifyPrompt(prompt: \($p | @json), useVllm: true) { tier confidence reasoning method latencyMs }}"
+    }')
+
+    # Make the request with a timeout
+    local response
+    response=$(curl -s --max-time "$TIMEOUT" \
+        -H "Content-Type: application/json" \
+        -d "$json_payload" \
+        "$GRAPHQL_URL" 2>/dev/null)
+
+    if [[ -z "$response" ]]; then
+        return 1
+    fi
+
+    # Check for errors
+    local errors
+    errors=$(echo "$response" | jq -r '.errors[0].message // empty' 2>/dev/null)
+    if [[ -n "$errors" ]]; then
+        return 1
+    fi
+
+    # Extract result
+    local tier confidence reasoning method
+    tier=$(echo "$response" | jq -r '.data.classifyPrompt.tier // empty' 2>/dev/null)
+    confidence=$(echo "$response" | jq -r '.data.classifyPrompt.confidence // empty' 2>/dev/null)
+    reasoning=$(echo "$response" | jq -r '.data.classifyPrompt.reasoning // empty' 2>/dev/null)
+    method=$(echo "$response" | jq -r '.data.classifyPrompt.method // empty' 2>/dev/null)
+
+    if [[ -n "$tier" && -n "$confidence" ]]; then
+        echo "$tier|$confidence|$reasoning (via $method)"
+        return 0
+    fi
+
+    return 1
+}
+
+# Try vLLM first, fall back to regex
+classify_prompt() {
+    local prompt="$1"
+
+    # Try vLLM classification via GraphQL
+    local result
+    if result=$(classify_with_vllm "$prompt"); then
+        echo "$result"
+        return
+    fi
+
+    # Fall back to regex classification
+    classify_with_regex "$prompt"
+}
+
+# Classify the prompt (tier and intent)
 IFS='|' read -r CLASSIFICATION CONFIDENCE REASON <<< "$(classify_prompt "$PROMPT_LOWER")"
+IFS='|' read -r INTENT INTENT_CONFIDENCE INTENT_REASON <<< "$(classify_intent_with_regex "$PROMPT_LOWER")"
 
 SESSION_ID=$(get_session_id)
 WORKFLOW_ID=$(get_workflow_id)
 
-# Log the routing decision
-printf '{"ts":"%s","prompt_hash":"%s","prompt_snippet":"%s","classification":"%s","confidence":%s,"reason":"%s","project_path":"%s","session_id":"%s","workflow_id":"%s"}\n' \
+# Capture current session model and provider info (V11 Phase 4.1)
+CURRENT_MODEL="${CLAUDE_CODE_SUBAGENT_MODEL:-unknown}"
+CURRENT_PROVIDER="anthropic"  # Default assumption
+
+# Detect provider based on environment variables
+if [[ -n "${ANTHROPIC_BASE_URL:-}" ]]; then
+    if [[ "$ANTHROPIC_BASE_URL" == *"ollama"* ]]; then
+        CURRENT_PROVIDER="ollama"
+    elif [[ "$ANTHROPIC_BASE_URL" == *"openai"* ]]; then
+        CURRENT_PROVIDER="openai"
+    elif [[ -n "${COPILOT_URL:-}" && "$ANTHROPIC_BASE_URL" == "$COPILOT_URL" ]]; then
+        CURRENT_PROVIDER="copilot"
+    fi
+fi
+
+# Log the routing decision (V11: now includes session model/provider)
+printf '{"ts":"%s","prompt_hash":"%s","prompt_snippet":"%s","classification":"%s","confidence":%s,"reason":"%s","intent":"%s","intent_confidence":%s,"intent_reason":"%s","project_path":"%s","session_id":"%s","workflow_id":"%s","session_model":"%s","session_provider":"%s"}\n' \
     "$(date -Iseconds)" \
     "$PROMPT_HASH" \
     "$PROMPT_SNIPPET" \
     "$CLASSIFICATION" \
     "$CONFIDENCE" \
-    "$REASON" \
+    "${REASON//\"/\\\"}" \
+    "$INTENT" \
+    "$INTENT_CONFIDENCE" \
+    "${INTENT_REASON//\"/\\\"}" \
     "$PWD" \
     "$SESSION_ID" \
-    "$WORKFLOW_ID" >> "$ROUTING_LOG"
+    "$WORKFLOW_ID" \
+    "$CURRENT_MODEL" \
+    "$CURRENT_PROVIDER" >> "$ROUTING_LOG"
 
-# Output suggestion to Claude (only for non-opus classifications)
-# We don't need to suggest Opus since that's the default behavior
-if [[ "$CLASSIFICATION" != "opus" ]]; then
-    echo "<model-routing-suggestion>"
-    echo "Task complexity: $CLASSIFICATION (confidence: $CONFIDENCE)"
-    echo ""
-    if [[ "$CLASSIFICATION" == "haiku" ]]; then
-        echo "This appears to be a simple task. When spawning subagents, consider using model: haiku"
-        echo "Example: Task tool with model parameter set to 'haiku'"
-    elif [[ "$CLASSIFICATION" == "sonnet" ]]; then
-        echo "This appears to be a moderate complexity task. The default sonnet model for subagents is appropriate."
+# Save current routing for Stop hook enforcement (now includes intent)
+ROUTING_STATE_FILE="$HOME/.claude/session-state/current-routing.json"
+mkdir -p "$HOME/.claude/session-state"
+printf '{"classification":"%s","confidence":%s,"intent":"%s","intent_confidence":%s,"timestamp":"%s"}\n' \
+    "$CLASSIFICATION" "$CONFIDENCE" "$INTENT" "$INTENT_CONFIDENCE" "$(date -Iseconds)" > "$ROUTING_STATE_FILE"
+
+# Map to generic tier names (V12)
+GENERIC_TIER=$(tier_to_generic "$CLASSIFICATION")
+
+# Output suggestions to Claude
+echo "<model-routing-suggestion>"
+
+# Tier suggestion (only for non-reasoning tier)
+if [[ "$GENERIC_TIER" != "reasoning" ]]; then
+    echo "Task complexity: $GENERIC_TIER (confidence: $CONFIDENCE)"
+    if [[ "$GENERIC_TIER" == "fast" ]]; then
+        echo "  → When spawning subagents, use model: haiku (98% savings vs opus)"
+    elif [[ "$GENERIC_TIER" == "balanced" ]]; then
+        echo "  → Default sonnet model for subagents is appropriate (80% savings vs opus)"
+    elif [[ "$GENERIC_TIER" == "local" ]]; then
+        echo "  → Consider local LLMs: qwen2.5-coder-7b, deepseek-r1-7b"
     fi
-    echo "</model-routing-suggestion>"
 fi
+
+# Intent classification (always output)
+echo ""
+echo "Intent: $INTENT (confidence: $INTENT_CONFIDENCE)"
+case "$INTENT" in
+    action)
+        echo "  → User wants RESULTS. Apply fixes immediately. Don't just explain - DO IT."
+        ;;
+    conversation)
+        echo "  → User wants DISCUSSION. Explain, compare options, don't modify anything."
+        ;;
+    investigate)
+        echo "  → User wants DIAGNOSIS. Research and report findings, then WAIT for direction."
+        ;;
+    ambiguous)
+        echo "  → Intent unclear. If you identify a fix, ASK before applying it."
+        ;;
+esac
+
+# Auto-escalation to reasoning-tier agent (Phase 2.2 - V11 roadmap, V12 portable)
+if [[ "$GENERIC_TIER" == "reasoning" && "$CONFIDENCE" > "0.7" ]]; then
+    CURRENT_MODEL="${CLAUDE_CODE_SUBAGENT_MODEL:-unknown}"
+    if [[ "$CURRENT_MODEL" == *"sonnet"* || "$CURRENT_MODEL" == *"balanced"* ]]; then
+        echo ""
+        echo "🧠 Auto-escalation suggestion:"
+        echo "  → This task requires reasoning-tier capabilities but you're in a balanced session"
+        echo "  → Consider: Task tool with subagent_type='opus-reasoner'"
+        echo "  → Use case: Complex architecture, multi-step planning, architectural tradeoffs"
+        echo "  → This keeps your main conversation cost-efficient while accessing deep reasoning"
+    fi
+fi
+
+echo "</model-routing-suggestion>"
 
 exit 0

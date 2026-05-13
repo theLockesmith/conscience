@@ -8,11 +8,14 @@
 # Tracks:
 #   - session_id: derived from Claude transcript path (unique per session)
 #   - workflow_id: from workflow-detector hook (groups agents in workflow)
+#   - parallel_group_id: groups agents launched within same second (parallel execution)
 
 set -uo pipefail
 
 AGENT_LOG="$HOME/.claude/agent-activity.jsonl"
 WORKFLOW_STATE_DIR="$HOME/.claude/workflow-state"
+PARALLEL_STATE_DIR="$HOME/.claude/parallel-state"
+mkdir -p "$PARALLEL_STATE_DIR"
 
 # Derive session_id from Claude's transcript path pattern
 # Claude stores transcripts at ~/.claude/projects/-{path-with-dashes}/
@@ -49,8 +52,34 @@ get_workflow_id() {
     echo ""
 }
 
+# Get or create parallel_group_id for agents launched in the same second
+# This detects parallel execution by grouping agents invoked within 1 second
+get_parallel_group_id() {
+    local current_ts=$(date +%s)
+    local pwd_hash=$(echo "$PWD" | md5sum | cut -c1-8)
+    local parallel_file="$PARALLEL_STATE_DIR/parallel-${pwd_hash}.state"
+
+    if [[ -f "$parallel_file" ]]; then
+        # Read last timestamp and group ID
+        local last_ts last_group_id
+        read -r last_ts last_group_id < "$parallel_file"
+
+        # If within 1 second, reuse the same group ID
+        if (( current_ts - last_ts <= 1 )); then
+            echo "$last_group_id"
+            return
+        fi
+    fi
+
+    # Create new group ID (timestamp-based)
+    local new_group_id="pg-${current_ts}-$$"
+    echo "$current_ts $new_group_id" > "$parallel_file"
+    echo "$new_group_id"
+}
+
 SESSION_ID=$(get_session_id)
 WORKFLOW_ID=$(get_workflow_id)
+PARALLEL_GROUP_ID=""
 
 # Read hook input
 HOOK_INPUT=$(cat)
@@ -58,18 +87,21 @@ HOOK_TYPE="${CLAUDE_HOOK_TYPE:-SubagentStop}"
 
 # For PreToolUse on Task tool - log agent invocation
 if [[ "$HOOK_TYPE" == "PreToolUse" ]]; then
-    TOOL_NAME=$(echo "$HOOK_INPUT" | jq -r '.tool_input.tool_name // ""' 2>/dev/null)
+    TOOL_NAME=$(echo "$HOOK_INPUT" | jq -r '.tool_name // ""' 2>/dev/null)
 
     if [[ "$TOOL_NAME" == "Task" ]]; then
         # Extract agent info from Task tool input
-        SUBAGENT_TYPE=$(echo "$HOOK_INPUT" | jq -r '.tool_input.input.subagent_type // "unknown"' 2>/dev/null)
-        DESCRIPTION=$(echo "$HOOK_INPUT" | jq -r '.tool_input.input.description // ""' 2>/dev/null)
-        PROMPT=$(echo "$HOOK_INPUT" | jq -r '.tool_input.input.prompt // ""' 2>/dev/null | head -c 200)
-        BACKGROUND=$(echo "$HOOK_INPUT" | jq -r '.tool_input.input.run_in_background // false' 2>/dev/null)
-        MODEL=$(echo "$HOOK_INPUT" | jq -r '.tool_input.input.model // "default"' 2>/dev/null)
+        SUBAGENT_TYPE=$(echo "$HOOK_INPUT" | jq -r '.tool_input.subagent_type // "unknown"' 2>/dev/null)
+        DESCRIPTION=$(echo "$HOOK_INPUT" | jq -r '.tool_input.description // ""' 2>/dev/null)
+        PROMPT=$(echo "$HOOK_INPUT" | jq -r '.tool_input.prompt // ""' 2>/dev/null | head -c 200)
+        BACKGROUND=$(echo "$HOOK_INPUT" | jq -r '.tool_input.run_in_background // false' 2>/dev/null)
+        MODEL=$(echo "$HOOK_INPUT" | jq -r '.tool_input.model // "default"' 2>/dev/null)
 
-        # Log invocation
-        printf '{"ts":"%s","event":"invoke","agent":"%s","desc":"%s","prompt":"%s","background":%s,"model":"%s","pwd":"%s","session_id":"%s","workflow_id":"%s"}\n' \
+        # Get parallel group ID for detecting parallel agent launches
+        PARALLEL_GROUP_ID=$(get_parallel_group_id)
+
+        # Log invocation with parallel_group_id
+        printf '{"ts":"%s","event":"invoke","agent":"%s","desc":"%s","prompt":"%s","background":%s,"model":"%s","pwd":"%s","session_id":"%s","workflow_id":"%s","parallel_group_id":"%s"}\n' \
             "$(date -Iseconds)" \
             "$SUBAGENT_TYPE" \
             "$DESCRIPTION" \
@@ -78,7 +110,8 @@ if [[ "$HOOK_TYPE" == "PreToolUse" ]]; then
             "$MODEL" \
             "$PWD" \
             "$SESSION_ID" \
-            "$WORKFLOW_ID" >> "$AGENT_LOG"
+            "$WORKFLOW_ID" \
+            "$PARALLEL_GROUP_ID" >> "$AGENT_LOG"
     fi
 fi
 
@@ -91,8 +124,8 @@ if [[ "$HOOK_TYPE" == "SubagentStop" ]]; then
     DURATION=$(echo "$HOOK_INPUT" | jq -r '.duration_ms // 0' 2>/dev/null)
     RESULT_LEN=$(echo "$HOOK_INPUT" | jq -r '.result // "" | length' 2>/dev/null || echo 0)
 
-    # Log completion
-    printf '{"ts":"%s","event":"complete","agent":"%s","agent_id":"%s","success":%s,"duration_ms":%d,"result_bytes":%d,"pwd":"%s","session_id":"%s","workflow_id":"%s"}\n' \
+    # Log completion (parallel_group_id tracked on invoke, not completion)
+    printf '{"ts":"%s","event":"complete","agent":"%s","agent_id":"%s","success":%s,"duration_ms":%d,"result_bytes":%d,"pwd":"%s","session_id":"%s","workflow_id":"%s","parallel_group_id":""}\n' \
         "$(date -Iseconds)" \
         "$AGENT_TYPE" \
         "$AGENT_ID" \

@@ -18,19 +18,14 @@ POSTGRES_HOST="${POSTGRES_HOST:-postgres-rw.db.aegis-hq.xyz}"
 POSTGRES_PORT="${POSTGRES_PORT:-5432}"
 POSTGRES_DB="${POSTGRES_DB:-ragdb}"
 POSTGRES_USER="${POSTGRES_USER:-rag}"
-POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
+# Password from environment or fallback (same as coord-session-register.sh)
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-***REDACTED-cred-rotated-2026-05-13***}"
+# Ollama for embeddings, LocalAI for LLM
 OLLAMA_HOST="${OLLAMA_HOST:-10.0.4.10:11434}"
-OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5-coder:7b}"
+LOCALAI_HOST="${LOCALAI_HOST:-10.0.4.10:8000}"
+LOCALAI_MODEL="${LOCALAI_MODEL:-qwen2.5-coder-7b}"
 
 LOG_FILE="$HOME/.claude/rule-violations.log"
-
-# Read password from MCP config if not set
-if [[ -z "$POSTGRES_PASSWORD" ]]; then
-    MCP_CONFIG="$HOME/claude/personal/localhost/.mcp.json"
-    if [[ -f "$MCP_CONFIG" ]]; then
-        POSTGRES_PASSWORD=$(jq -r '.mcpServers.rag.env.POSTGRES_PASSWORD // empty' "$MCP_CONFIG" 2>/dev/null)
-    fi
-fi
 
 # Read hook input
 HOOK_INPUT=$(cat)
@@ -124,13 +119,13 @@ Be strict but fair. Only BLOCK clear violations, not edge cases.
 Your response must start with either 'BLOCK:' or 'PASS'."
 
     local llm_response
-    llm_response=$(curl -s "http://${OLLAMA_HOST}/api/generate" \
+    llm_response=$(curl -s "http://${LOCALAI_HOST}/v1/chat/completions" \
         -H "Content-Type: application/json" \
         -d "$(jq -n \
-            --arg model "$OLLAMA_MODEL" \
+            --arg model "$LOCALAI_MODEL" \
             --arg prompt "$prompt" \
-            '{model: $model, prompt: $prompt, stream: false, options: {temperature: 0.1, num_predict: 200}}')" \
-        2>/dev/null | jq -r '.response // "PASS"' 2>/dev/null)
+            '{model: $model, messages: [{role: "user", content: $prompt}], temperature: 0.1, max_tokens: 200}')" \
+        2>/dev/null | jq -r '.choices[0].message.content // "PASS"' 2>/dev/null)
 
     echo "$llm_response"
 }

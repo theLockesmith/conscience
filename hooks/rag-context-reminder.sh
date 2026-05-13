@@ -1,44 +1,56 @@
 #!/bin/bash
-# RAG Context Reminder - Reminds to check RAG before answering
+# RAG Context Loader - Automatically loads relevant RAG context on every message
 # Hook: UserPromptSubmit
 #
-# PURPOSE: When user asks about something we might have encountered before,
-# remind Claude to check RAG first.
+# PURPOSE: Force RAG lookup on every message. No more "reminders" - actually DO the search
+# and inject relevant learnings/decisions into context.
 #
-# Triggers on:
-# - Questions about past work ("did we", "have we", "last time", "before")
-# - Fix/debug requests (may have encountered similar before)
-# - Configuration questions (may have documented settings)
-# - Architecture/design questions (may have made related decisions)
+# Queries:
+# 1. Critical learnings (gotchas) - always injected
+# 2. Recent learnings for current project (last 30 days)
+# 3. Recent decisions for current project (last 30 days)
 
 set -uo pipefail
 
 # Read hook input
 INPUT=$(cat)
 USER_PROMPT=$(echo "$INPUT" | jq -r '.user_prompt // .prompt // .message // empty' 2>/dev/null)
+CWD=$(echo "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
 
 # Skip if no prompt
 if [[ -z "$USER_PROMPT" || "$USER_PROMPT" == "null" ]]; then
     exit 0
 fi
 
-# Convert to lowercase for matching
-PROMPT_LOWER=$(echo "$USER_PROMPT" | tr '[:upper:]' '[:lower:]')
+# Determine project from working directory
+PROJECT=""
+if [[ -n "$CWD" ]]; then
+    # Extract project name from path patterns like /home/*/arbiter/*/project or /home/*/Development/*/project
+    if [[ "$CWD" =~ arbiter/([^/]+)/([^/]+) ]]; then
+        PROJECT="${BASH_REMATCH[2]}"
+    elif [[ "$CWD" =~ Development/([^/]+)/([^/]+) ]]; then
+        PROJECT="${BASH_REMATCH[2]}"
+    elif [[ "$CWD" =~ arbiter/([^/]+)$ ]]; then
+        PROJECT="${BASH_REMATCH[1]}"
+    fi
+fi
 
-# ============================================================================
-# PATTERN DETECTION
-# ============================================================================
-
-# ============================================================================
-# CRITICAL LEARNINGS - ALWAYS INJECT
-# Query RAG for critical gotchas and inject them every time
-# ============================================================================
-
-# Check for critical learnings in RAG (category=gotcha or has 'critical'/'hooks' tags)
+# Get DB credentials
 POSTGRES_PASSWORD=$(jq -r '.mcpServers.rag.env.POSTGRES_PASSWORD // empty' ~/.claude.json 2>/dev/null)
-if [[ -n "$POSTGRES_PASSWORD" ]]; then
-    CRITICAL=$(PGPASSWORD="$POSTGRES_PASSWORD" psql -h "${POSTGRES_HOST:-postgres-rw.db.aegis-hq.xyz}" -p "${POSTGRES_PORT:-5432}" \
-        -U "${POSTGRES_USER:-rag}" -d "${POSTGRES_DB:-ragdb}" -t -A 2>/dev/null << 'SQL'
+if [[ -z "$POSTGRES_PASSWORD" ]]; then
+    exit 0
+fi
+
+POSTGRES_HOST="${POSTGRES_HOST:-postgres-rw.db.aegis-hq.xyz}"
+POSTGRES_PORT="${POSTGRES_PORT:-5432}"
+POSTGRES_USER="${POSTGRES_USER:-rag}"
+POSTGRES_DB="${POSTGRES_DB:-ragdb}"
+
+# ============================================================================
+# 1. CRITICAL LEARNINGS - Always inject gotchas
+# ============================================================================
+CRITICAL=$(PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" \
+    -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -A 2>/dev/null << 'SQL'
 SELECT string_agg(content, E'\n- ')
 FROM (
     SELECT DISTINCT ON (content) content, created_at
@@ -50,19 +62,94 @@ FROM (
     LIMIT 10
 ) sub;
 SQL
+)
+
+if [[ -n "$CRITICAL" && "$CRITICAL" != "" ]]; then
+    echo "<critical-learnings>"
+    echo "**APPLY THESE RULES TO YOUR RESPONSE:**"
+    echo "- $CRITICAL"
+    echo "</critical-learnings>"
+fi
+
+# ============================================================================
+# 2. RECENT LEARNINGS - Last 30 days for current project (or global if no project)
+# ============================================================================
+if [[ -n "$PROJECT" ]]; then
+    LEARNINGS=$(PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" \
+        -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -A 2>/dev/null << SQL
+SELECT string_agg(formatted, E'\n')
+FROM (
+    SELECT '- [' || UPPER(category) || '] ' || content ||
+           CASE WHEN context IS NOT NULL AND context != '' THEN E'\n  _Context: ' || context || '_' ELSE '' END as formatted
+    FROM learnings
+    WHERE (project = '$PROJECT' OR project IS NULL)
+      AND created_at > NOW() - INTERVAL '30 days'
+      AND category != 'gotcha'  -- Already included in critical
+    ORDER BY created_at DESC
+    LIMIT 5
+) sub;
+SQL
+    )
+else
+    # No project context - get recent global learnings
+    LEARNINGS=$(PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" \
+        -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -A 2>/dev/null << 'SQL'
+SELECT string_agg(formatted, E'\n')
+FROM (
+    SELECT '- [' || UPPER(category) || '] ' || content ||
+           CASE WHEN context IS NOT NULL AND context != '' THEN E'\n  _Context: ' || context || '_' ELSE '' END as formatted
+    FROM learnings
+    WHERE project IS NULL
+      AND created_at > NOW() - INTERVAL '30 days'
+      AND category != 'gotcha'
+    ORDER BY created_at DESC
+    LIMIT 5
+) sub;
+SQL
+    )
+fi
+
+if [[ -n "$LEARNINGS" && "$LEARNINGS" != "" ]]; then
+    echo "<recent-learnings project=\"${PROJECT:-global}\">"
+    echo "**Recent learnings (auto-loaded from RAG):**"
+    echo "$LEARNINGS"
+    echo "</recent-learnings>"
+fi
+
+# ============================================================================
+# 3. RECENT DECISIONS - Last 30 days for current project
+# ============================================================================
+if [[ -n "$PROJECT" ]]; then
+    DECISIONS=$(PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" \
+        -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -A 2>/dev/null << SQL
+SELECT string_agg(formatted, E'\n')
+FROM (
+    SELECT '- **' || summary || '** (' || TO_CHAR(created_at, 'YYYY-MM-DD') || ')' ||
+           E'\n  _Rationale: ' || LEFT(rationale, 200) || CASE WHEN LENGTH(rationale) > 200 THEN '...' ELSE '' END || '_' as formatted
+    FROM decisions
+    WHERE (project = '$PROJECT' OR project IS NULL)
+      AND created_at > NOW() - INTERVAL '30 days'
+    ORDER BY created_at DESC
+    LIMIT 3
+) sub;
+SQL
     )
 
-    if [[ -n "$CRITICAL" && "$CRITICAL" != "" ]]; then
-        echo "<critical-learnings>"
-        echo "**APPLY THESE RULES TO YOUR RESPONSE:**"
-        echo "- $CRITICAL"
-        echo "</critical-learnings>"
+    if [[ -n "$DECISIONS" && "$DECISIONS" != "" ]]; then
+        echo "<recent-decisions project=\"$PROJECT\">"
+        echo "**Recent decisions (auto-loaded from RAG):**"
+        echo "$DECISIONS"
+        echo "</recent-decisions>"
     fi
 fi
 
+# ============================================================================
+# 4. PATTERN-BASED REMINDERS - Keep for specific triggers
+# ============================================================================
+PROMPT_LOWER=$(echo "$USER_PROMPT" | tr '[:upper:]' '[:lower:]')
 OUTPUT=""
 
-# Pattern 1: Questions about past work
+# Only add reminder if asking about past work specifically
 if echo "$PROMPT_LOWER" | grep -qE 'did we|have we|last time|before|previous|remember|forgot|earlier|already'; then
     OUTPUT+="<rag-reminder>\n"
     OUTPUT+="**CHECK RAG MEMORY FIRST**: This question references past work. Use:\n"
@@ -72,7 +159,7 @@ if echo "$PROMPT_LOWER" | grep -qE 'did we|have we|last time|before|previous|rem
     OUTPUT+="</rag-reminder>\n"
 fi
 
-# Pattern 2: Fix/debug requests (check for similar past issues)
+# Debug/fix requests - suggest checking for similar issues
 if echo "$PROMPT_LOWER" | grep -qE 'fix|debug|broken|not working|error|issue|problem|wrong|fail'; then
     if [[ -z "$OUTPUT" ]]; then
         OUTPUT+="<rag-reminder>\n"
@@ -83,29 +170,6 @@ if echo "$PROMPT_LOWER" | grep -qE 'fix|debug|broken|not working|error|issue|pro
     fi
 fi
 
-# Pattern 3: Configuration questions
-if echo "$PROMPT_LOWER" | grep -qE 'config|setting|where is|how do i|setup|configure'; then
-    if [[ -z "$OUTPUT" ]]; then
-        OUTPUT+="<rag-reminder>\n"
-        OUTPUT+="**CHECK RAG FOR CONFIGURATION**: Search for documented settings:\n"
-        OUTPUT+="- \`mcp__rag__search_docs\` for configuration documentation\n"
-        OUTPUT+="- \`mcp__rag__search_instructions\` for project rules\n"
-        OUTPUT+="</rag-reminder>\n"
-    fi
-fi
-
-# Pattern 4: Architecture/design questions
-if echo "$PROMPT_LOWER" | grep -qE 'architect|design|approach|should we|how should|best way|pattern'; then
-    if [[ -z "$OUTPUT" ]]; then
-        OUTPUT+="<rag-reminder>\n"
-        OUTPUT+="**CHECK RAG FOR PAST DECISIONS**: Search for related architectural choices:\n"
-        OUTPUT+="- \`mcp__rag__search_decisions\` for past approach selections\n"
-        OUTPUT+="- \`mcp__rag__search_learnings\` with category='architecture'\n"
-        OUTPUT+="</rag-reminder>\n"
-    fi
-fi
-
-# Output reminder if any patterns matched
 if [[ -n "$OUTPUT" ]]; then
     echo -e "$OUTPUT"
 fi

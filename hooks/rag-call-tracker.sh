@@ -16,16 +16,29 @@ RAG_VERIFIED_FILE="$STATE_DIR/${SESSION_ID}.rag_verified"
 INPUT=$(cat)
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
 
-# If state file exists and has compaction flag, mark RAG as called
+# Only these tools actually load session context
+CONTEXT_LOADING_TOOLS="search_learnings|search_decisions|get_session_context|get_project_context"
+
+# If state file exists, check if this is a context-loading tool
 if [[ -f "$STATE_FILE" ]]; then
-    # Update rag_called to 1
-    sed -i 's/^rag_called=.*/rag_called=1/' "$STATE_FILE"
-    echo "[$(date -Iseconds)] RAG tool called, enforcement cleared" >> "$HOME/.claude/compaction-tracker.log"
+    if [[ "$TOOL_NAME" =~ ($CONTEXT_LOADING_TOOLS) ]]; then
+        # Update rag_called to 1 - only for context-loading tools
+        sed -i 's/^rag_called=.*/rag_called=1/' "$STATE_FILE"
+        echo "[$(date -Iseconds)] Context loaded via $TOOL_NAME, enforcement cleared" >> "$HOME/.claude/rag-enforcement.log"
+    fi
 fi
 
 # Create/touch verification file for infrastructure command enforcement
 # This allows infrastructure commands after RAG verification
 touch "$RAG_VERIFIED_FILE"
 echo "[$(date -Iseconds)] RAG verified: $TOOL_NAME" >> "$HOME/.claude/infra-verification.log"
+
+# Record RAG call for current turn (used by require-rag-lookup.sh)
+TURN_ID_FILE="$STATE_DIR/current-turn-id.txt"
+RAG_TURNS_FILE="$STATE_DIR/rag-calls-this-turn.txt"
+if [[ -f "$TURN_ID_FILE" ]]; then
+    CURRENT_TURN=$(cat "$TURN_ID_FILE")
+    echo "${CURRENT_TURN}:${TOOL_NAME}" >> "$RAG_TURNS_FILE"
+fi
 
 exit 0
