@@ -28,7 +28,7 @@ POSTGRES_PORT="${POSTGRES_PORT:-5432}"
 POSTGRES_DB="${POSTGRES_DB:-ragdb}"
 POSTGRES_USER="${POSTGRES_USER:-rag}"
 # Password from environment or fallback (same as coord-session-register.sh)
-POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-***REDACTED-cred-rotated-2026-05-13***}"
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:?POSTGRES_PASSWORD env var required}"
 
 # Determine project from PWD
 PROJECT_PATH="$PWD"
