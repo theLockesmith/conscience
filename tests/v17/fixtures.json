@@ -1,0 +1,196 @@
+[
+  {
+    "name": "helm upgrade with -n",
+    "cmd_b64": "aGVsbSB1cGdyYWRlIHJhZy1tY3AgLi9jaGFydCAtbiByYWc=",
+    "expected": [
+      "helm_release:rag-mcp",
+      "k8s_namespace:rag"
+    ]
+  },
+  {
+    "name": "helm install short ns",
+    "cmd_b64": "aGVsbSBpbnN0YWxsIGhhcmJvciBoYXJib3IvaGFyYm9yIC0tbmFtZXNwYWNlIGhhcmJvcg==",
+    "expected": [
+      "helm_release:harbor",
+      "k8s_namespace:harbor"
+    ]
+  },
+  {
+    "name": "helm release teardown",
+    "cmd_b64": "aGVsbSB1bmluc3RhbGwgZHJhZ29uZmx5IC1uIGRyYWdvbmZseQ==",
+    "expected": [
+      "helm_release:dragonfly",
+      "k8s_namespace:dragonfly"
+    ]
+  },
+  {
+    "name": "helm with --context",
+    "cmd_b64": "aGVsbSB1cGdyYWRlIHJhZy1tY3AgLiAtbiByYWcgLS1jb250ZXh0IGF0bGFudGlz",
+    "expected": [
+      "helm_release:rag-mcp",
+      "k8s_namespace:rag",
+      "k8s_context:atlantis"
+    ]
+  },
+  {
+    "name": "helm list (no release)",
+    "cmd_b64": "aGVsbSBsaXN0IC1uIHJhZw==",
+    "expected": []
+  },
+  {
+    "name": "pod removal kind+name",
+    "cmd_b64": "a3ViZWN0bCBkZWxldGUgcG9kIG15LXBvZCAtbiByYWc=",
+    "expected": [
+      "k8s_resource:pod/my-pod",
+      "k8s_namespace:rag"
+    ]
+  },
+  {
+    "name": "oc rollout restart sts",
+    "cmd_b64": "b2Mgcm9sbG91dCByZXN0YXJ0IHN0cy9kcmFnb25mbHkgLW4gZHJhZ29uZmx5",
+    "expected": [
+      "k8s_resource:sts/dragonfly",
+      "k8s_namespace:dragonfly"
+    ]
+  },
+  {
+    "name": "kubectl scale deploy +ctx",
+    "cmd_b64": "a3ViZWN0bCBzY2FsZSBkZXBsb3kvcmFnLW1jcCAtLXJlcGxpY2FzPTAgLW4gcmFnIC0tY29udGV4dCBhdGxhbnRpcw==",
+    "expected": [
+      "k8s_resource:deploy/rag-mcp",
+      "k8s_namespace:rag",
+      "k8s_context:atlantis"
+    ]
+  },
+  {
+    "name": "oc-atlantis alias ctx",
+    "cmd_b64": "b2MtYXRsYW50aXMgZ2V0IHBvZHMgLW4gcmFn",
+    "expected": [
+      "k8s_namespace:rag",
+      "k8s_context:atlantis"
+    ]
+  },
+  {
+    "name": "oc-pantheon alias removal",
+    "cmd_b64": "b2MtcGFudGhlb24gZGVsZXRlIHBvZCB4IC1uIGRhdGEtYXhsZQ==",
+    "expected": [
+      "k8s_resource:pod/x",
+      "k8s_namespace:data-axle",
+      "k8s_context:pantheon"
+    ]
+  },
+  {
+    "name": "docker compose teardown",
+    "cmd_b64": "ZG9ja2VyIGNvbXBvc2UgLWYgL2V0Yy9kb2NrZXItY29tcG9zZS55bWwgZG93bg==",
+    "expected": [
+      "docker_compose:/etc/docker-compose.yml"
+    ]
+  },
+  {
+    "name": "docker-compose legacy",
+    "cmd_b64": "ZG9ja2VyLWNvbXBvc2UgLWYgY29tcG9zZS55bWwgdXAgLWQ=",
+    "expected": [
+      "docker_compose:compose.yml"
+    ]
+  },
+  {
+    "name": "systemctl restart unit",
+    "cmd_b64": "c3lzdGVtY3RsIHJlc3RhcnQgcmFnLWV2ZW50LWNvbGxlY3Rvci5zZXJ2aWNl",
+    "expected": [
+      "systemd_unit:rag-event-collector.service"
+    ]
+  },
+  {
+    "name": "systemctl --user start",
+    "cmd_b64": "c3lzdGVtY3RsIC0tdXNlciBzdGFydCBwbGFzbWFzaGVsbC13YXRjaGRvZy50aW1lcg==",
+    "expected": [
+      "systemd_unit:plasmashell-watchdog.timer"
+    ]
+  },
+  {
+    "name": "systemctl status flag",
+    "cmd_b64": "c3lzdGVtY3RsIHN0YXR1cyBnZG0zLnNlcnZpY2UgLS1uby1wYWdlcg==",
+    "expected": [
+      "systemd_unit:gdm3.service"
+    ]
+  },
+  {
+    "name": "ssh plain",
+    "cmd_b64": "c3NoIHBvc3RncmVz",
+    "expected": [
+      "ssh_host:postgres"
+    ]
+  },
+  {
+    "name": "ssh user@host",
+    "cmd_b64": "c3NoIHJvb3RAYmFzdGlvbi5hZWdpcy1ocS54eXo=",
+    "expected": [
+      "ssh_host:root@bastion.aegis-hq.xyz"
+    ]
+  },
+  {
+    "name": "ssh -o skipped",
+    "cmd_b64": "c3NoIC1vIFN0cmljdEhvc3RLZXlDaGVja2luZz1ubyBwb3N0Z3Jlcy1ydy5kYi5hZWdpcy1ocS54eXo=",
+    "expected": [
+      "ssh_host:postgres-rw.db.aegis-hq.xyz"
+    ]
+  },
+  {
+    "name": "atlas role",
+    "cmd_b64": "YXRsYXMga3ViZS9yYWctbWNwLXNlcnZlcg==",
+    "expected": [
+      "atlas_role:kube/rag-mcp-server"
+    ]
+  },
+  {
+    "name": "ansible-playbook -i",
+    "cmd_b64": "YW5zaWJsZS1wbGF5Ym9vayAtaSBob3N0cyBwbGF5cy9wb3N0Z3Jlcy1yb3RhdGUueW1s",
+    "expected": [
+      "ansible_play:plays/postgres-rotate.yml"
+    ]
+  },
+  {
+    "name": "&& chains both",
+    "cmd_b64": "a3ViZWN0bCBkZWxldGUgcG9kIHggLW4gcmFnICYmIGhlbG0gdXBncmFkZSByYWctbWNwIC4gLW4gcmFn",
+    "expected": [
+      "k8s_resource:pod/x",
+      "k8s_namespace:rag",
+      "helm_release:rag-mcp"
+    ]
+  },
+  {
+    "name": "; chains all",
+    "cmd_b64": "c3lzdGVtY3RsIHJlc3RhcnQgZm9vLnNlcnZpY2U7IHNzaCBwb3N0Z3Jlcw==",
+    "expected": [
+      "systemd_unit:foo.service",
+      "ssh_host:postgres"
+    ]
+  },
+  {
+    "name": "sudo prefix stripped",
+    "cmd_b64": "c3VkbyBzeXN0ZW1jdGwgcmVzdGFydCByYWctc3luYy1wcm9jZXNzb3Iuc2VydmljZQ==",
+    "expected": [
+      "systemd_unit:rag-sync-processor.service"
+    ]
+  },
+  {
+    "name": "echo emits nothing",
+    "cmd_b64": "ZWNobyBoZWxsbw==",
+    "expected": []
+  },
+  {
+    "name": "empty command",
+    "cmd_b64": "",
+    "expected": []
+  },
+  {
+    "name": "ls -la emits nothing",
+    "cmd_b64": "bHMgLWxhIC9ldGM=",
+    "expected": []
+  },
+  {
+    "name": "git log emits nothing",
+    "cmd_b64": "Z2l0IGxvZyAtLW9uZWxpbmU=",
+    "expected": []
+  }
+]
