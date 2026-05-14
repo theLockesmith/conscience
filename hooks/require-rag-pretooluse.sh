@@ -47,7 +47,7 @@ esac
 # Only enforce on substantive (modification-committing) tools.
 # Bash removed: it covers everything from `ls` to `kubectl apply`; destructive
 # shapes are caught by block-destructive.sh, not this hook.
-SUBSTANTIVE_REGEX="^(Edit|Write|Task|NotebookEdit|WebFetch|WebSearch)$"
+SUBSTANTIVE_REGEX="^(Edit|Write|Task|NotebookEdit)$"  # WebFetch/WebSearch are READ-ONLY investigation, not commitment; removed 2026-05-14
 [[ "$TOOL_NAME" =~ $SUBSTANTIVE_REGEX ]] || exit 0
 
 # Path-based exemption: scratch dirs are free of the gate regardless of size.
