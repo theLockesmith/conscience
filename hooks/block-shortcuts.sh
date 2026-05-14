@@ -9,6 +9,9 @@
 #
 # This hook enforces: USE EXISTING CODE PATHS, DON'T REINVENT
 
+# [hook-tune] invocation log
+echo "[HOOK DEBUG] block-shortcuts.sh invoked at $(date -Iseconds)" >> /tmp/claude-hook-debug.log 2>/dev/null || true
+
 set -uo pipefail
 
 LOG_FILE="$HOME/.claude/shortcut-violations.log"
@@ -37,6 +40,10 @@ if echo "$CODE" | grep -qE '(AZURE_FUNCTION_URL|idi-receiver|zinier)' 2>/dev/nul
             echo "$(date -Iseconds) $REASON" >> "$LOG_FILE"
             echo "File: $FILE_PATH" >> "$LOG_FILE"
             echo "---" >> "$LOG_FILE"
+            # [hook-tune] block log
+            echo "[HOOK BLOCK] block-shortcuts.sh blocking at $(date -Iseconds)" >> /tmp/claude-hook-debug.log 2>/dev/null || true
+            # [hook-tune] block log
+            echo "[HOOK BLOCK] block-shortcuts.sh blocking at $(date -Iseconds)" >> /tmp/claude-hook-debug.log 2>/dev/null || true
             echo "{\"decision\": \"block\", \"reason\": \"$REASON\"}"
             exit 0
         fi
@@ -53,6 +60,10 @@ if echo "$FILE_PATH" | grep -qiE '(replay|backfill|resend|refire)' 2>/dev/null; 
             echo "$(date -Iseconds) $REASON" >> "$LOG_FILE"
             echo "File: $FILE_PATH" >> "$LOG_FILE"
             echo "---" >> "$LOG_FILE"
+            # [hook-tune] block log
+            echo "[HOOK BLOCK] block-shortcuts.sh blocking at $(date -Iseconds)" >> /tmp/claude-hook-debug.log 2>/dev/null || true
+            # [hook-tune] block log
+            echo "[HOOK BLOCK] block-shortcuts.sh blocking at $(date -Iseconds)" >> /tmp/claude-hook-debug.log 2>/dev/null || true
             echo "{\"decision\": \"block\", \"reason\": \"$REASON\"}"
             exit 0
         fi
@@ -67,6 +78,10 @@ if echo "$CODE" | grep -qE '(for.*in.*orders|while.*order|batch|bulk)' 2>/dev/nu
             echo "$(date -Iseconds) $REASON" >> "$LOG_FILE"
             echo "File: $FILE_PATH" >> "$LOG_FILE"
             echo "---" >> "$LOG_FILE"
+            # [hook-tune] block log
+            echo "[HOOK BLOCK] block-shortcuts.sh blocking at $(date -Iseconds)" >> /tmp/claude-hook-debug.log 2>/dev/null || true
+            # [hook-tune] block log
+            echo "[HOOK BLOCK] block-shortcuts.sh blocking at $(date -Iseconds)" >> /tmp/claude-hook-debug.log 2>/dev/null || true
             echo "{\"decision\": \"block\", \"reason\": \"$REASON\"}"
             exit 0
         fi
@@ -85,6 +100,10 @@ if echo "$CODE" | grep -qE '(INSERT INTO|UPDATE.*SET|DELETE FROM)' 2>/dev/null; 
             echo "$(date -Iseconds) $REASON" >> "$LOG_FILE"
             echo "File: $FILE_PATH" >> "$LOG_FILE"
             echo "---" >> "$LOG_FILE"
+            # [hook-tune] block log
+            echo "[HOOK BLOCK] block-shortcuts.sh blocking at $(date -Iseconds)" >> /tmp/claude-hook-debug.log 2>/dev/null || true
+            # [hook-tune] block log
+            echo "[HOOK BLOCK] block-shortcuts.sh blocking at $(date -Iseconds)" >> /tmp/claude-hook-debug.log 2>/dev/null || true
             echo "{\"decision\": \"block\", \"reason\": \"$REASON\"}"
             exit 0
         fi
@@ -109,6 +128,10 @@ for func_check in "${EXISTING_FUNCTIONS[@]}"; do
             echo "$(date -Iseconds) $REASON" >> "$LOG_FILE"
             echo "File: $FILE_PATH" >> "$LOG_FILE"
             echo "---" >> "$LOG_FILE"
+            # [hook-tune] block log
+            echo "[HOOK BLOCK] block-shortcuts.sh blocking at $(date -Iseconds)" >> /tmp/claude-hook-debug.log 2>/dev/null || true
+            # [hook-tune] block log
+            echo "[HOOK BLOCK] block-shortcuts.sh blocking at $(date -Iseconds)" >> /tmp/claude-hook-debug.log 2>/dev/null || true
             echo "{\"decision\": \"block\", \"reason\": \"$REASON\"}"
             exit 0
         fi

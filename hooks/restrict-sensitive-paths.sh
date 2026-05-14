@@ -5,6 +5,9 @@
 #
 # PURPOSE: Blocks writes to sensitive paths like ~/.ssh, /etc, .env files
 
+# [hook-tune] invocation log
+echo "[HOOK DEBUG] restrict-sensitive-paths.sh invoked at $(date -Iseconds)" >> /tmp/claude-hook-debug.log 2>/dev/null || true
+
 set -uo pipefail
 
 LOG_FILE="$HOME/.claude/security/audit.log"
@@ -58,6 +61,10 @@ for name in "${!BLOCKED_PATHS[@]}"; do
     blocked_path="${BLOCKED_PATHS[$name]}"
     if [[ "$NORMALIZED_PATH" == "$blocked_path"* ]]; then
         echo "[$(date -Iseconds)] BLOCKED: Write to sensitive path ($name): $FILE_PATH" >> "$LOG_FILE"
+        # [hook-tune] block log
+        echo "[HOOK BLOCK] restrict-sensitive-paths.sh blocking at $(date -Iseconds)" >> /tmp/claude-hook-debug.log 2>/dev/null || true
+        # [hook-tune] block log
+        echo "[HOOK BLOCK] restrict-sensitive-paths.sh blocking at $(date -Iseconds)" >> /tmp/claude-hook-debug.log 2>/dev/null || true
         echo "{\"decision\": \"block\", \"reason\": \"BLOCKED: Cannot write to sensitive path ($name): $FILE_PATH\"}"
         exit 0
     fi
@@ -68,6 +75,10 @@ BASENAME=$(basename "$FILE_PATH")
 for pattern in "${BLOCKED_PATTERNS[@]}"; do
     if echo "$BASENAME" | grep -qE "$pattern" 2>/dev/null; then
         echo "[$(date -Iseconds)] BLOCKED: Write to sensitive file pattern ($pattern): $FILE_PATH" >> "$LOG_FILE"
+        # [hook-tune] block log
+        echo "[HOOK BLOCK] restrict-sensitive-paths.sh blocking at $(date -Iseconds)" >> /tmp/claude-hook-debug.log 2>/dev/null || true
+        # [hook-tune] block log
+        echo "[HOOK BLOCK] restrict-sensitive-paths.sh blocking at $(date -Iseconds)" >> /tmp/claude-hook-debug.log 2>/dev/null || true
         echo "{\"decision\": \"block\", \"reason\": \"BLOCKED: Cannot write to sensitive file type ($pattern): $FILE_PATH\"}"
         exit 0
     fi

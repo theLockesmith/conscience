@@ -11,6 +11,9 @@
 # Location: ~/.claude/hooks/block-gitlab-registry-config.sh
 # Created: 2026-04-27
 
+# [hook-tune] invocation log
+echo "[HOOK DEBUG] block-gitlab-registry-config.sh invoked at $(date -Iseconds)" >> /tmp/claude-hook-debug.log 2>/dev/null || true
+
 set -uo pipefail
 
 INPUT=$(cat)
@@ -73,6 +76,8 @@ for pattern in "${REGISTRY_PATTERNS[@]}"; do
         echo "" >&2
         echo "Standard GitLab CI uses CI_REGISTRY_* variables which are auto-populated." >&2
         echo "For Kaniko, use: --destination=\$CI_REGISTRY_IMAGE:\$CI_COMMIT_SHORT_SHA" >&2
+        # [hook-tune] block log
+        echo "[HOOK BLOCK] block-gitlab-registry-config.sh blocking at $(date -Iseconds)" >> /tmp/claude-hook-debug.log 2>/dev/null || true
         exit 2
     fi
 done

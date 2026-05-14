@@ -19,6 +19,25 @@ echo "[HOOK DEBUG] Command: $COMMAND" >> /tmp/claude-hook-debug.log
 # Strip heredoc body so patterns inside `cat <<EOF ... EOF` don't match.
 COMMAND_BEFORE_HEREDOC="${COMMAND%%<<*}"
 
+# [hook-tune] heredoc-safe target detector
+# Decide whether the heredoc body should be scanned by the destructive-
+# verb regex below. If the heredoc is being executed by a shell or
+# interpreter, the body IS the command and we keep the original
+# behavior (scan $COMMAND). Otherwise the body is data, and we scan
+# only the pre-heredoc portion so a fixture/test/payload that describes
+# destructive verbs doesn't trip the gate.
+_HEREDOC_TARGET="${COMMAND_BEFORE_HEREDOC##*[[:space:]|;&\\]}"
+_HEREDOC_TARGET="${_HEREDOC_TARGET#sudo }"
+case "$_HEREDOC_TARGET" in
+    bash|sh|zsh|ksh|dash|python|python3|perl|ruby|pwsh|node|nodejs|tcl|lua|psql|mysql)
+        CMD_FOR_REGEX="$COMMAND"           # interpreter consumes heredoc; scan all
+        ;;
+    *)
+        CMD_FOR_REGEX="$COMMAND_BEFORE_HEREDOC"  # heredoc is passive data
+        ;;
+esac
+
+
 # =============================================================================
 # LITERAL-VERB BLOCK LIST  (word-boundary regex; catches inside quotes/pipes/eval)
 # =============================================================================
@@ -66,7 +85,7 @@ declare -A BLOCKED=(
 )
 
 for pattern in "${!BLOCKED[@]}"; do
-    if echo "$COMMAND" | grep -qiE -- "$pattern" 2>/dev/null; then
+    if echo "$CMD_FOR_REGEX" | grep -qiE -- "$pattern" 2>/dev/null; then
         echo "BLOCKED: ${BLOCKED[$pattern]}. Pattern matched: '$pattern'. Requires explicit user approval." >&2
         exit 2
     fi
@@ -83,7 +102,7 @@ DB_DESTRUCTIVE+='|\b(dropdb|dropuser)\b'
 DB_DESTRUCTIVE+='|\bredis-cli\b.*\b(flushall|flushdb)\b'
 DB_DESTRUCTIVE+='|\bmongo(sh)?\b.*\bdropdatabase\b'
 DB_DESTRUCTIVE+='|\bpg_drop_replication_slot\b'
-if echo "$COMMAND" | grep -qiE "$DB_DESTRUCTIVE"; then
+if echo "$CMD_FOR_REGEX" | grep -qiE "$DB_DESTRUCTIVE"; then
     echo "BLOCKED: Database destructive operation (DROP/TRUNCATE/DELETE FROM/FLUSH). Requires explicit user approval." >&2
     exit 2
 fi
@@ -92,7 +111,7 @@ fi
 IAC_DESTRUCTIVE='\bterraform[[:space:]]+(destroy|apply[[:space:]]+.*-destroy)\b'
 IAC_DESTRUCTIVE+='|\bhelm[[:space:]]+(uninstall|delete|rollback)\b'
 IAC_DESTRUCTIVE+='|\bpulumi[[:space:]]+destroy\b'
-if echo "$COMMAND" | grep -qiE "$IAC_DESTRUCTIVE"; then
+if echo "$CMD_FOR_REGEX" | grep -qiE "$IAC_DESTRUCTIVE"; then
     echo "BLOCKED: IaC destructive operation (terraform/helm/pulumi). Requires explicit user approval." >&2
     exit 2
 fi
@@ -101,7 +120,7 @@ fi
 CLOUD_DESTRUCTIVE='\baws[[:space:]]+(ec2[[:space:]]+terminate-instances|s3[[:space:]]+rm[[:space:]]+.*--recursive|s3[[:space:]]+rb|.*[[:space:]]delete-(bucket|instance|volume|snapshot|cluster|table|stack|db-instance|db-cluster|cluster-snapshot|file-system|load-balancer))\b'
 CLOUD_DESTRUCTIVE+='|\bgcloud[[:space:]]+(compute|sql|storage|projects|container|dns|kms|iam|secrets|run|functions|pubsub)[[:space:]]+(.*[[:space:]])?delete\b'
 CLOUD_DESTRUCTIVE+='|\baz[[:space:]]+(vm|disk|storage|group|aks|sql|network|keyvault|functionapp|webapp|cosmosdb)[[:space:]]+(.*[[:space:]])?delete\b'
-if echo "$COMMAND" | grep -qiE "$CLOUD_DESTRUCTIVE"; then
+if echo "$CMD_FOR_REGEX" | grep -qiE "$CLOUD_DESTRUCTIVE"; then
     echo "BLOCKED: Cloud CLI destructive operation (aws/gcloud/az). Requires explicit user approval." >&2
     exit 2
 fi
@@ -110,7 +129,7 @@ fi
 DELETE_PIPELINES='\bfind\b.*-delete\b'
 DELETE_PIPELINES+='|\bfind\b.*-exec(dir)?[[:space:]]+rm\b'
 DELETE_PIPELINES+='|\bxargs\b[[:space:]]+(.*[[:space:]])?rm\b'
-if echo "$COMMAND" | grep -qiE "$DELETE_PIPELINES"; then
+if echo "$CMD_FOR_REGEX" | grep -qiE "$DELETE_PIPELINES"; then
     echo "BLOCKED: Pipelined deletion (find -delete / find -exec rm / xargs rm). Requires explicit user approval." >&2
     exit 2
 fi
@@ -123,7 +142,7 @@ DISK_DESTRUCTIVE+='|\b(lvremove|vgremove|pvremove|lvreduce)\b'
 DISK_DESTRUCTIVE+='|\bparted\b.*[[:space:]](rm|mklabel)\b'
 DISK_DESTRUCTIVE+='|\bblkdiscard\b'
 DISK_DESTRUCTIVE+='|\bshred[[:space:]]+.*-[a-z]*u'
-if echo "$COMMAND" | grep -qiE "$DISK_DESTRUCTIVE"; then
+if echo "$CMD_FOR_REGEX" | grep -qiE "$DISK_DESTRUCTIVE"; then
     echo "BLOCKED: Disk/filesystem-level destructive operation. Requires explicit user approval." >&2
     exit 2
 fi
@@ -138,7 +157,7 @@ GIT_DESTRUCTIVE+='|\bgit[[:space:]]+gc[[:space:]]+.*--prune=now'
 GIT_DESTRUCTIVE+='|\bgit[[:space:]]+filter-(branch|repo)\b'
 GIT_DESTRUCTIVE+='|\bgit[[:space:]]+update-ref[[:space:]]+.*-d\b'
 GIT_DESTRUCTIVE+='|\bgit[[:space:]]+worktree[[:space:]]+remove[[:space:]]+.*--force\b'
-if echo "$COMMAND" | grep -qiE "$GIT_DESTRUCTIVE"; then
+if echo "$CMD_FOR_REGEX" | grep -qiE "$GIT_DESTRUCTIVE"; then
     echo "BLOCKED: Git destructive operation (branch -D, checkout --, stash drop, reflog expire, history rewrite, etc.). Requires explicit user approval." >&2
     exit 2
 fi
@@ -148,7 +167,7 @@ fi
 LIFECYCLE='\b(shutdown|reboot|poweroff|halt)([[:space:]]|$|;|&|\|)'
 LIFECYCLE+='|\bsystemctl[[:space:]]+(mask|isolate|emergency|rescue)\b'
 LIFECYCLE+='|\b(userdel|groupdel)([[:space:]]|$|;|&|\|)'
-if echo "$COMMAND" | grep -qiE "$LIFECYCLE"; then
+if echo "$CMD_FOR_REGEX" | grep -qiE "$LIFECYCLE"; then
     echo "BLOCKED: System lifecycle operation (shutdown/reboot/mask/userdel). Requires explicit user approval." >&2
     exit 2
 fi
@@ -167,7 +186,7 @@ SCRIPTED_DESTRUCTIVE='\bpython[0-9.]*[[:space:]]+.*-c[[:space:]]+.*(\bshutil\.rm
 SCRIPTED_DESTRUCTIVE+='|\bperl[[:space:]]+.*-[A-Za-z]*e[[:space:]]+.*\b(unlink\b|rmdir\b|system[[:space:]]+.*\brm[[:space:]]+-)'
 SCRIPTED_DESTRUCTIVE+='|\bnode[[:space:]]+.*-e[[:space:]]+.*(\.(rmSync|unlinkSync|rmdirSync|rm|unlink|rmdir)\(|\bfs\.(rm|unlink|rmdir))'
 SCRIPTED_DESTRUCTIVE+='|\bruby[[:space:]]+.*-e[[:space:]]+.*\b(File\.delete|FileUtils\.(rm|rm_rf|rm_r)|Dir\.rmdir)\b'
-if echo "$COMMAND" | grep -qiE "$SCRIPTED_DESTRUCTIVE"; then
+if echo "$CMD_FOR_REGEX" | grep -qiE "$SCRIPTED_DESTRUCTIVE"; then
     echo "BLOCKED: Scripted destructive operation in -c/-e payload (python/perl/node/ruby). Requires explicit user approval." >&2
     exit 2
 fi
@@ -178,7 +197,7 @@ fi
 PIPED_EXEC='\b(curl|wget|fetch)\b[^|]*\|[[:space:]]*(sudo[[:space:]]+)?(bash|sh|zsh|ksh)\b'
 PIPED_EXEC+='|\bbase64\b[^|]*-d[^|]*\|[[:space:]]*(sudo[[:space:]]+)?(bash|sh|zsh|ksh)\b'
 PIPED_EXEC+='|\bxxd\b[^|]*-r[^|]*\|[[:space:]]*(sudo[[:space:]]+)?(bash|sh|zsh|ksh)\b'
-if echo "$COMMAND" | grep -qiE "$PIPED_EXEC"; then
+if echo "$CMD_FOR_REGEX" | grep -qiE "$PIPED_EXEC"; then
     echo "BLOCKED: Piped remote/encoded execution (curl|bash, base64|bash, etc.). Cannot be reviewed before execution. Requires explicit user approval." >&2
     exit 2
 fi
@@ -189,7 +208,7 @@ fi
 # dirs and repo paths are allowed — only well-known scratch areas are blocked.
 # Allows flags between the read command and the path (e.g., `head -n 100 /tmp/x`).
 UNTRUSTED_PIPE='(cat|head|tail|less|more|bat|view)[[:space:]]+([^|/]*[[:space:]])?(/tmp/|/var/tmp/|'"$HOME"'/Downloads/|'"$HOME"'/Desktop/|/run/user/[0-9]+/)[^|]*\|[[:space:]]*(sudo[[:space:]]+)?(bash|sh|zsh|ksh)\b'
-if echo "$COMMAND" | grep -qiE "$UNTRUSTED_PIPE"; then
+if echo "$CMD_FOR_REGEX" | grep -qiE "$UNTRUSTED_PIPE"; then
     echo "BLOCKED: Piping a file from an untrusted location (/tmp, /var/tmp, ~/Downloads, ~/Desktop, /run/user) to a shell. Move the file to a project dir and review it first, or get explicit user approval." >&2
     exit 2
 fi
@@ -203,7 +222,7 @@ VAR_INDIRECTION='\$\{?[A-Z_][A-Z0-9_]*\}?[[:space:]]+(delete|destroy|drop|termin
 VAR_INDIRECTION+='|\$\{?(RM|REMOVE|DEL|DELETE|UNLINK|DESTROY|PURGE|WIPE|TRASH)[A-Z0-9_]*\}?[[:space:]]+-[a-zA-Z]*[rR]'
 VAR_INDIRECTION+='|\beval\b[^|;&]*\b(delete|destroy|drop|terminate|purge|format|mkfs|reboot|shutdown)\b'
 VAR_INDIRECTION+='|\beval\b[^|;&]*\brm[[:space:]]+-[a-zA-Z]*[rR]'
-if echo "$COMMAND" | grep -qiE "$VAR_INDIRECTION"; then
+if echo "$CMD_FOR_REGEX" | grep -qiE "$VAR_INDIRECTION"; then
     echo "BLOCKED: Variable indirection or eval with destructive verb. Resolve the variable / inline the command so the destructive action is reviewable, or get explicit user approval." >&2
     exit 2
 fi
@@ -225,13 +244,13 @@ if echo "$COMMAND_BEFORE_HEREDOC" | grep -qE '\bgit[[:space:]]+rm\b'; then
 fi
 
 # Block --force but allow --force-with-lease (safer alternative)
-if echo "$COMMAND" | grep -qE '\-\-force($|\s)' && ! echo "$COMMAND" | grep -q '\-\-force-with-lease'; then
+if echo "$CMD_FOR_REGEX" | grep -qE '\-\-force($|\s)' && ! echo "$COMMAND" | grep -q '\-\-force-with-lease'; then
     echo "BLOCKED: --force flag detected. Use --force-with-lease, or get explicit user approval." >&2
     exit 2
 fi
 
 # Block git push -f (short form) but allow if --force-with-lease is also present
-if echo "$COMMAND" | grep -qE 'git\s+push\s+.*-f($|\s)' && ! echo "$COMMAND" | grep -q '\-\-force-with-lease'; then
+if echo "$CMD_FOR_REGEX" | grep -qE 'git\s+push\s+.*-f($|\s)' && ! echo "$COMMAND" | grep -q '\-\-force-with-lease'; then
     echo "BLOCKED: git push -f (force push). Use --force-with-lease, or get explicit user approval." >&2
     exit 2
 fi
@@ -246,7 +265,7 @@ declare -A WARN_PATTERNS=(
 )
 
 for pattern in "${!WARN_PATTERNS[@]}"; do
-    if echo "$COMMAND" | grep -qiE -- "$pattern"; then
+    if echo "$CMD_FOR_REGEX" | grep -qiE -- "$pattern"; then
         echo "[HOOK WARNING] ${WARN_PATTERNS[$pattern]}: $COMMAND" >&2
     fi
 done

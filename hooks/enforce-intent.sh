@@ -15,6 +15,9 @@
 #
 # Config: ~/.claude/session-state/current-routing.json (set by model-router.sh)
 
+# [hook-tune] invocation log
+echo "[HOOK DEBUG] enforce-intent.sh invoked at $(date -Iseconds)" >> /tmp/claude-hook-debug.log 2>/dev/null || true
+
 set -uo pipefail
 
 ROUTING_FILE="$HOME/.claude/session-state/current-routing.json"

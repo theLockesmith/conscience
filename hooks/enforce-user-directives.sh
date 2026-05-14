@@ -6,6 +6,9 @@
 # No exceptions. No "but I think it's helpful". No "the user probably meant".
 # The user's explicit instruction is LAW.
 
+# [hook-tune] invocation log
+echo "[HOOK DEBUG] enforce-user-directives.sh invoked at $(date -Iseconds)" >> /tmp/claude-hook-debug.log 2>/dev/null || true
+
 set -uo pipefail
 
 INPUT=$(cat)
@@ -30,6 +33,8 @@ hard_block() {
     echo "" >&2
     echo "You were EXPLICITLY TOLD not to do this. This is NON-NEGOTIABLE." >&2
     echo "To release this block, the user must explicitly grant permission." >&2
+    # [hook-tune] block log
+    echo "[HOOK BLOCK] enforce-user-directives.sh blocking at $(date -Iseconds)" >> /tmp/claude-hook-debug.log 2>/dev/null || true
     exit 2
 }
 
