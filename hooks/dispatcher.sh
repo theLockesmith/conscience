@@ -91,7 +91,8 @@ run_hook() {
     # Pipes can lose exit codes in some bash edge cases
     local input_file=$(mktemp)
     echo "$INPUT" > "$input_file"
-    timeout "$timeout" "$cmd" < "$input_file" >"$stdout_file" 2>"$stderr_file"
+    local cmd_expanded="${cmd//\$HOME/$HOME}"
+    timeout "$timeout" "$cmd_expanded" < "$input_file" >"$stdout_file" 2>"$stderr_file"
     HOOK_EXIT_CODE=$?
     rm -f "$input_file"
     HOOK_RESULT=$(cat "$stdout_file")

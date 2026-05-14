@@ -28,26 +28,26 @@ hooks:
   PreToolUse:
     - matcher: "Bash"
       commands:
-        - "/home/forgemaster/.claude/hooks/enforce-user-directives.sh"
-        - "/home/forgemaster/.claude/hooks/block-session-killers.sh"
-        - "/home/forgemaster/.claude/hooks/block-destructive.sh"
-        - "/home/forgemaster/.claude/hooks/block-secrets.sh"
-        - "/home/forgemaster/.claude/hooks/verify-infra-target.sh"
-        - "/home/forgemaster/.claude/hooks/unknown-tool-detector.sh"
-        - "/home/forgemaster/.claude/hooks/enforce-tool-rules.sh"
-        - "/home/forgemaster/.claude/hooks/warn-network-egress.sh"
-        - "/home/forgemaster/.claude/hooks/enforce-claude-md.sh"
-        - "/home/forgemaster/.claude/hooks/filter-verbose-output.sh"
+        - "$HOME/.claude/hooks/enforce-user-directives.sh"
+        - "$HOME/.claude/hooks/block-session-killers.sh"
+        - "$HOME/.claude/hooks/block-destructive.sh"
+        - "$HOME/.claude/hooks/block-secrets.sh"
+        - "$HOME/.claude/hooks/verify-infra-target.sh"
+        - "$HOME/.claude/hooks/unknown-tool-detector.sh"
+        - "$HOME/.claude/hooks/enforce-tool-rules.sh"
+        - "$HOME/.claude/hooks/warn-network-egress.sh"
+        - "$HOME/.claude/hooks/enforce-claude-md.sh"
+        - "$HOME/.claude/hooks/filter-verbose-output.sh"
       timeout: 10
     - matcher: "Read"
       commands:
-        - "/home/forgemaster/.claude/hooks/block-secrets.sh"
-        - "/home/forgemaster/.claude/hooks/read-tracker.sh"
+        - "$HOME/.claude/hooks/block-secrets.sh"
+        - "$HOME/.claude/hooks/read-tracker.sh"
       timeout: 5
     # Track MCP tool calls (for RAG source validation)
     - matcher: "mcp__"
       commands:
-        - "/home/forgemaster/.claude/hooks/verify-infra-target.sh"
+        - "$HOME/.claude/hooks/verify-infra-target.sh"
       timeout: 5
     # FORCE RAG search before any substantive action this turn.
     # Replaces the Stop-hook RAG_REQUIRED check (which wasted tokens by
@@ -55,21 +55,21 @@ hooks:
     # cost = a single tool-call round trip, not a whole response.
     - matcher: "Edit|Write|Bash|Task|NotebookEdit|WebFetch|WebSearch"
       commands:
-        - "/home/forgemaster/.claude/hooks/require-rag-pretooluse.sh"
+        - "$HOME/.claude/hooks/require-rag-pretooluse.sh"
       timeout: 5
     - matcher: "Glob"
       commands:
-        - "/home/forgemaster/.claude/hooks/enforce-claude-md.sh"
+        - "$HOME/.claude/hooks/enforce-claude-md.sh"
       timeout: 5
     - matcher: "Grep"
       commands:
-        - "/home/forgemaster/.claude/hooks/enforce-claude-md.sh"
+        - "$HOME/.claude/hooks/enforce-claude-md.sh"
       timeout: 5
     - matcher: "Task"
       commands:
-        - "/home/forgemaster/.claude/hooks/enforce-task-routing.sh"
-        - "/home/forgemaster/.claude/hooks/agent-resource-limits.sh"
-        - "/home/forgemaster/.claude/hooks/agent-tracker.sh"
+        - "$HOME/.claude/hooks/enforce-task-routing.sh"
+        - "$HOME/.claude/hooks/agent-resource-limits.sh"
+        - "$HOME/.claude/hooks/agent-tracker.sh"
       timeout: 10
     # SHORTCUT BLOCKER - Prevents bypassing existing code paths
     # Created 2026-03-18 after duplicate order incident
@@ -79,16 +79,16 @@ hooks:
     # INTENT ENFORCEMENT - Blocks modifications when intent="conversation"
     - matcher: "Edit|Write"
       commands:
-        - "/home/forgemaster/.claude/hooks/enforce-intent.sh"
-        - "/home/forgemaster/.claude/hooks/enforce-user-directives.sh"
-        - "/home/forgemaster/.claude/hooks/block-shortcuts.sh"
-        - "/home/forgemaster/.claude/hooks/restrict-sensitive-paths.sh"
-        - "/home/forgemaster/.claude/hooks/block-gitlab-registry-config.sh"
+        - "$HOME/.claude/hooks/enforce-intent.sh"
+        - "$HOME/.claude/hooks/enforce-user-directives.sh"
+        - "$HOME/.claude/hooks/block-shortcuts.sh"
+        - "$HOME/.claude/hooks/restrict-sensitive-paths.sh"
+        - "$HOME/.claude/hooks/block-gitlab-registry-config.sh"
       timeout: 10
     # LEARNING CITATION VALIDATION - Requires verified sources for log_learning
     - matcher: "mcp__rag__log_learning"
       commands:
-        - "/home/forgemaster/.claude/hooks/validate-learning-source.sh"
+        - "$HOME/.claude/hooks/validate-learning-source.sh"
       timeout: 5
   # Response validation (rule enforcement) + context extraction + session hygiene + QUALITY ENFORCEMENT
   # Context extraction only runs when context usage > 70% (checked via transcript file size)
@@ -100,68 +100,68 @@ hooks:
   # RAG GIVEUP ENFORCEMENT - Blocks "can't/not available" unless RAG was searched first
   Stop:
     - commands:
-        - "/home/forgemaster/.claude/hooks/enforce-rag-post-compaction.sh"
-        - "/home/forgemaster/.claude/hooks/enforce-rag-before-giveup.sh"
-        - "/home/forgemaster/.claude/hooks/enforce-question-answering.sh"
-        - "/home/forgemaster/.claude/hooks/quality-enforcer.sh"
-        - "/home/forgemaster/.claude/hooks/escalation-tracker.sh"
-        - "/home/forgemaster/.claude/hooks/pre-completion-verification.sh"
-        - "/home/forgemaster/.claude/hooks/workflow-checkpoint.sh"
+        - "$HOME/.claude/hooks/enforce-rag-post-compaction.sh"
+        - "$HOME/.claude/hooks/enforce-rag-before-giveup.sh"
+        - "$HOME/.claude/hooks/enforce-question-answering.sh"
+        - "$HOME/.claude/hooks/quality-enforcer.sh"
+        - "$HOME/.claude/hooks/escalation-tracker.sh"
+        - "$HOME/.claude/hooks/pre-completion-verification.sh"
+        - "$HOME/.claude/hooks/workflow-checkpoint.sh"
       timeout: 15
   # Pre-compaction extraction - runs BEFORE compaction to save context
   # This is more reliable than Stop hooks which may not fire after compaction
   PreCompact:
     - commands:
-        - "/home/forgemaster/.claude/hooks/pre-compaction-extractor.sh"
+        - "$HOME/.claude/hooks/pre-compaction-extractor.sh"
       timeout: 120
   # Context injection on user prompt + RAG reminders
   # USER DIRECTIVE TRACKING - Records "don't modify" instructions for enforcement
   # BUDGET ENFORCEMENT - Warns/blocks when session costs approach limits
   UserPromptSubmit:
     - commands:
-        - "/home/forgemaster/.claude/hooks/budget-enforcer.sh"
-        - "/home/forgemaster/.claude/hooks/track-user-directives.sh"
-        - "/home/forgemaster/.claude/hooks/track-user-prompts.sh"
-        - "/home/forgemaster/.claude/hooks/pane-status-update.sh"
-        - "/home/forgemaster/.claude/hooks/model-router.sh"
-        - "/home/forgemaster/.claude/hooks/auto-project-context.sh"
-        - "/home/forgemaster/.claude/hooks/rag-context-reminder.sh"
-        - "/home/forgemaster/.claude/hooks/agent-triggers.sh"
-        - "/home/forgemaster/.claude/hooks/workflow-detector.sh"
-        - "/home/forgemaster/.claude/hooks/multi-session-context.sh"
+        - "$HOME/.claude/hooks/budget-enforcer.sh"
+        - "$HOME/.claude/hooks/track-user-directives.sh"
+        - "$HOME/.claude/hooks/track-user-prompts.sh"
+        - "$HOME/.claude/hooks/pane-status-update.sh"
+        - "$HOME/.claude/hooks/model-router.sh"
+        - "$HOME/.claude/hooks/auto-project-context.sh"
+        - "$HOME/.claude/hooks/rag-context-reminder.sh"
+        - "$HOME/.claude/hooks/agent-triggers.sh"
+        - "$HOME/.claude/hooks/workflow-detector.sh"
+        - "$HOME/.claude/hooks/multi-session-context.sh"
       timeout: 10
   # Notification on subagent completion
   SubagentStop:
     - commands:
-        - "/home/forgemaster/.claude/hooks/agent-tracker.sh"
-        - "/home/forgemaster/.claude/hooks/task-completed-notify.sh"
+        - "$HOME/.claude/hooks/agent-tracker.sh"
+        - "$HOME/.claude/hooks/task-completed-notify.sh"
       timeout: 5
   # Post-tool actions
   PostToolUse:
     - matcher: "Edit|Write"
       commands:
-        - "/home/forgemaster/.claude/hooks/post-code-review.sh"
-        - "/home/forgemaster/.claude/hooks/weekly-update-reminder.sh"
+        - "$HOME/.claude/hooks/post-code-review.sh"
+        - "$HOME/.claude/hooks/weekly-update-reminder.sh"
       timeout: 15
     - matcher: "Bash"
       commands:
-        - "/home/forgemaster/.claude/hooks/sanitize-output.sh"
-        - "/home/forgemaster/.claude/hooks/weekly-update-reminder.sh"
-        - "/home/forgemaster/.claude/hooks/session-source-tracker.sh"
+        - "$HOME/.claude/hooks/sanitize-output.sh"
+        - "$HOME/.claude/hooks/weekly-update-reminder.sh"
+        - "$HOME/.claude/hooks/session-source-tracker.sh"
       timeout: 10
     - matcher: "Read"
       commands:
-        - "/home/forgemaster/.claude/hooks/session-source-tracker.sh"
+        - "$HOME/.claude/hooks/session-source-tracker.sh"
       timeout: 5
     # Track RAG logging to verify memory is being used
     - matcher: "mcp__rag__log"
       commands:
-        - "/home/forgemaster/.claude/hooks/rag-usage-tracker.sh"
+        - "$HOME/.claude/hooks/rag-usage-tracker.sh"
       timeout: 5
     # Track ANY RAG call to clear post-compaction enforcement
     - matcher: "mcp__rag__"
       commands:
-        - "/home/forgemaster/.claude/hooks/rag-call-tracker.sh"
+        - "$HOME/.claude/hooks/rag-call-tracker.sh"
       timeout: 5
   # Session start hooks (new session or after compaction)
   # CRITICAL: validate-hooks.sh MUST run first to fix permissions before other hooks
@@ -170,28 +170,28 @@ hooks:
   SessionStart:
     - matcher: "new"
       commands:
-        - "/home/forgemaster/.claude/hooks/validate-hooks.sh"
-        - "/home/forgemaster/.claude/hooks/session-health-check.sh"
-        - "/home/forgemaster/.claude/hooks/session-memory-loader.sh"
-        - "/home/forgemaster/.claude/hooks/enforce-claude-md-reading.sh"
-        - "/home/forgemaster/.claude/hooks/weekly-update-init.sh"
-        - "/home/forgemaster/.claude/hooks/coord-session-register.sh"
+        - "$HOME/.claude/hooks/validate-hooks.sh"
+        - "$HOME/.claude/hooks/session-health-check.sh"
+        - "$HOME/.claude/hooks/session-memory-loader.sh"
+        - "$HOME/.claude/hooks/enforce-claude-md-reading.sh"
+        - "$HOME/.claude/hooks/weekly-update-init.sh"
+        - "$HOME/.claude/hooks/coord-session-register.sh"
       timeout: 30
     - matcher: "compact"
       commands:
-        - "/home/forgemaster/.claude/hooks/validate-hooks.sh"
-        - "/home/forgemaster/.claude/hooks/session-health-check.sh"
-        - "/home/forgemaster/.claude/hooks/session-memory-loader.sh"
-        - "/home/forgemaster/.claude/hooks/compaction-state-tracker.sh"
-        - "/home/forgemaster/.claude/hooks/post-compaction-reminder.sh"
-        - "/home/forgemaster/.claude/hooks/weekly-update-init.sh"
-        - "/home/forgemaster/.claude/hooks/coord-session-register.sh"
+        - "$HOME/.claude/hooks/validate-hooks.sh"
+        - "$HOME/.claude/hooks/session-health-check.sh"
+        - "$HOME/.claude/hooks/session-memory-loader.sh"
+        - "$HOME/.claude/hooks/compaction-state-tracker.sh"
+        - "$HOME/.claude/hooks/post-compaction-reminder.sh"
+        - "$HOME/.claude/hooks/weekly-update-init.sh"
+        - "$HOME/.claude/hooks/coord-session-register.sh"
       timeout: 30
     - matcher: "resume"
       commands:
-        - "/home/forgemaster/.claude/hooks/session-health-check.sh"
-        - "/home/forgemaster/.claude/hooks/session-memory-loader.sh"
-        - "/home/forgemaster/.claude/hooks/coord-session-register.sh"
+        - "$HOME/.claude/hooks/session-health-check.sh"
+        - "$HOME/.claude/hooks/session-memory-loader.sh"
+        - "$HOME/.claude/hooks/coord-session-register.sh"
       timeout: 30
 # Settings
 settings:
