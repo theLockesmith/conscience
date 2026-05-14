@@ -1,0 +1,133 @@
+# V17 Phase 2 -- Production target manifest
+#
+# Single source of truth for "which targets are considered shared/prod."
+# Hooks consult this file; nothing else hard-codes prod-target lists.
+#
+# Maintainer rule: adding a new shared service requires editing this
+# file. Hooks fail-closed if a target is unknown -- they still ask for
+# verify_action confirmation, but the operator-facing message is
+# louder for entries on this explicit list.
+#
+# Format consumed by:
+#   ~/.claude/hooks/verify-infra-target.sh    (Phase 3, target-aware gate)
+#   ~/.claude/hooks/block-destructive.sh      (Phase 4, shared-service-yank)
+#   ~/.claude/hooks/require-rag-pretooluse.sh (Phase 6, semantic RAG check)
+
+# -----------------------------------------------------------------------------
+# Helm releases
+# Match shape: helm_release:<release> from target-extract.sh
+# -----------------------------------------------------------------------------
+prod_helm_releases:
+  - { release: rag-mcp,         namespace: rag,        cluster: atlantis }
+  - { release: harbor,          namespace: harbor,     cluster: atlantis }
+  - { release: dragonfly,       namespace: dragonfly,  cluster: atlantis }
+  - { release: bitcoin,         namespace: bitcoin,    cluster: atlantis }
+  - { release: postgres-operator, namespace: postgresql, cluster: atlantis }
+
+# -----------------------------------------------------------------------------
+# K8s namespaces (per cluster context)
+# Match shape: k8s_namespace:<ns> + k8s_context:<ctx>
+# Wildcards: trailing '*' = glob match (openshift-* matches openshift-anything)
+# -----------------------------------------------------------------------------
+prod_k8s_namespaces:
+  atlantis:
+    - harbor
+    - dragonfly
+    - rag
+    - postgresql
+    - bitcoin
+    - kube-system
+    - openshift-*           # any openshift-system namespace
+    - default
+  pantheon:
+    - "*"                   # everything in pantheon is treated as prod
+
+# -----------------------------------------------------------------------------
+# Systemd units (local workstation services that other things depend on)
+# Match shape: systemd_unit:<unit>
+# -----------------------------------------------------------------------------
+prod_systemd_units:
+  - rag-event-collector.service
+  - rag-sync-processor.service
+  - rag-http-daemon.service
+  - claude-metrics-shipper.timer
+  - ccusage-sync.timer
+  - plasmashell-watchdog.timer
+  - gdm3.service
+
+# -----------------------------------------------------------------------------
+# Docker compose files
+# Match shape: docker_compose:<path>
+# Implicit rule: compose against ANY file NOT in local_dev_only is prod.
+# -----------------------------------------------------------------------------
+prod_docker_compose:
+  local_dev_only:
+    - ~/Development/coldforge-rag-mcp-server/docker-compose.yml
+
+# -----------------------------------------------------------------------------
+# SSH hosts (anything that lands on shared infra)
+# Match shape: ssh_host:<host>  (matches host, host:port, user@host literally)
+# Wildcards: trailing '*' = glob match
+# -----------------------------------------------------------------------------
+prod_ssh_hosts:
+  - postgres                          # peer-auth admin alias
+  - postgres-rw.db.aegis-hq.xyz
+  - postgres-ro.db.aegis-hq.xyz
+  - bastion.aegis-hq.xyz
+  - atlantis-*                        # any atlantis node
+  - pantheon-*                        # any pantheon node
+
+# -----------------------------------------------------------------------------
+# Verbs that count as "yanking" a prod target (Phase 4)
+# For each tool family, list the subcommands that materially change shared
+# state. The change-shape verbs (upgrade, restart, scale, rollout) are here
+# alongside the deletion-shape ones because the V17 thesis is that
+# CHANGE is operationally indistinguishable from DELETE for shared svcs.
+# -----------------------------------------------------------------------------
+yank_verbs:
+  helm:
+    - install
+    - upgrade
+    - rollback
+    - uninstall
+    - delete
+  kubectl:
+    - delete
+    - scale
+    - drain
+    - cordon
+    - patch
+    - apply
+    - replace
+    - edit
+    - rollout    # rollout restart/undo/pause are all change-shape
+  oc:
+    - delete
+    - scale
+    - drain
+    - cordon
+    - patch
+    - apply
+    - replace
+    - edit
+    - rollout
+  docker_compose:
+    - up
+    - down
+    - restart
+    - stop
+    - rm
+    - kill
+  systemctl:
+    - restart
+    - stop
+    - start
+    - reload
+    - disable
+    - enable
+    - mask
+    - unmask
+  atlas:
+    - kube_apply
+    - kube_delete
+    - playbook
