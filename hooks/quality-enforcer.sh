@@ -858,9 +858,9 @@ check_and_block "Single Org Filter" "$SINGLE_ORG_P" "$SINGLE_ORG_ESC" \
 # Root cause: Claude invents technical specifics instead of searching RAG.
 # Example failure: "port 5005" for GitLab registry when RAG shows registry.empacchosting.com
 
-INVENTED_INFRA_P="port [0-9]{4,5}|:50[0-9][0-9]|:30[0-9]{3}|:80[0-9]{2}|registry.*:[0-9]+|\.xyz:[0-9]+|\.com:[0-9]+|\.io:[0-9]+"
+INVENTED_INFRA_P="port [0-9]{4,5}|:50[0-9][0-9]|:30[0-9]{3}|:80[0-9]{2}|registry[^[:space:]]*:[0-9]{2,5}([/[:space:]]|$)|\.xyz:[0-9]+|\.com:[0-9]+|\.io:[0-9]+"
 # Escape: Evidence of RAG search showing this detail, or standard ports
-INVENTED_INFRA_ESC="mcp__rag__search|search_docs|rag.*showed|rag.*shows|rag.*confirmed|documentation shows|from the readme|from.*claude\.md|:443|:80|:22|:5432|:6379|:9090|:9093|:8080|:3000|:8443|:9000|port 22|port 443|port 80|port 5432|postgres.*5432|redis.*6379|prometheus.*9090"
+INVENTED_INFRA_ESC="mcp__rag__search|search_docs|rag.*showed|rag.*shows|rag.*confirmed|documentation shows|from the readme|from.*claude\.md|:443|:80|:22|:5432|:6379|:9090|:9093|:8080|:3000|:8443|:9000|port 22|port 443|port 80|port 5432|postgres.*5432|redis.*6379|prometheus.*9090|sha256|@sha256|image digest|digest pin"
 
 check_and_block "Invented Infra Details" "$INVENTED_INFRA_P" "$INVENTED_INFRA_ESC" \
     "INVENTED INFRA BLOCKED: You specified a non-standard port/URL without RAG evidence. SEARCH RAG for the correct infrastructure details. Do not guess ports or URLs." \
