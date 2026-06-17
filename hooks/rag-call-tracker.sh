@@ -77,4 +77,18 @@ if [[ "$TOOL_NAME" =~ ($CONTEXT_LOADING_TOOLS) ]]; then
     date +%s > "$STATE_DIR/last-rag-search.txt"
 fi
 
+
+# V17 Phase 5: verify_action recording.
+case "$TOOL_NAME" in
+    *verify_action)
+        VERIFY_LOG="$STATE_DIR/verify-actions-this-turn.jsonl"
+        INTENT_AND_TARGETS=$(echo "$INPUT" | jq -c \
+            '{intent: (.tool_input.intent // ""), targets: (.tool_input.targets // [])}' \
+            2>/dev/null)
+        if [[ -n "$INTENT_AND_TARGETS" && "$INTENT_AND_TARGETS" != "null" ]]; then
+            echo "$INTENT_AND_TARGETS" >> "$VERIFY_LOG"
+        fi
+        ;;
+esac
+
 exit 0

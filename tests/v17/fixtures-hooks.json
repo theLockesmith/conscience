@@ -1,0 +1,188 @@
+[
+  {
+    "name": "verify-infra-target: helm upgrade rag-mcp (no mention) BLOCKS",
+    "hook": "verify-infra-target.sh",
+    "prompt": "i need to look at pods",
+    "rag_calls": [],
+    "verify_actions": [],
+    "tool_input": {"tool_name": "Bash", "tool_input": {"command": "helm upgrade rag-mcp ./chart -n rag"}},
+    "expected_exit": 2
+  },
+  {
+    "name": "verify-infra-target: oc -n harbor delete pod BLOCKS",
+    "hook": "verify-infra-target.sh",
+    "prompt": "fix the cluster",
+    "rag_calls": [],
+    "verify_actions": [],
+    "tool_input": {"tool_name": "Bash", "tool_input": {"command": "oc -n harbor delete pod harbor-core-msh9w"}},
+    "expected_exit": 2
+  },
+  {
+    "name": "verify-infra-target: trivial pwd ALLOWS",
+    "hook": "verify-infra-target.sh",
+    "prompt": "",
+    "rag_calls": [],
+    "verify_actions": [],
+    "tool_input": {"tool_name": "Bash", "tool_input": {"command": "pwd"}},
+    "expected_exit": 0
+  },
+  {
+    "name": "verify-infra-target: ls /tmp (no prod) ALLOWS",
+    "hook": "verify-infra-target.sh",
+    "prompt": "",
+    "rag_calls": [],
+    "verify_actions": [],
+    "tool_input": {"tool_name": "Bash", "tool_input": {"command": "ls /tmp"}},
+    "expected_exit": 0
+  },
+  {
+    "name": "verify-infra-target: prompt mentions target ALLOWS",
+    "hook": "verify-infra-target.sh",
+    "prompt": "yes, roll rag-mcp now",
+    "rag_calls": [],
+    "verify_actions": [],
+    "tool_input": {"tool_name": "Bash", "tool_input": {"command": "helm upgrade rag-mcp ./chart -n rag"}},
+    "expected_exit": 0
+  },
+  {
+    "name": "verify-infra-target: rag RESULT mentions target ALLOWS",
+    "hook": "verify-infra-target.sh",
+    "prompt": "looking at deploys",
+    "rag_calls": [
+      ["RESULT", "Documentation about rag-mcp helm chart upgrade procedure"]
+    ],
+    "verify_actions": [],
+    "tool_input": {"tool_name": "Bash", "tool_input": {"command": "helm upgrade rag-mcp ./chart -n rag"}},
+    "expected_exit": 0
+  },
+  {
+    "name": "verify-infra-target: only QUERY mentions target BLOCKS",
+    "hook": "verify-infra-target.sh",
+    "prompt": "looking at deploys",
+    "rag_calls": [
+      ["QUERY", "rag-mcp upgrade docs"],
+      ["RESULT", "No relevant documents found"]
+    ],
+    "verify_actions": [],
+    "tool_input": {"tool_name": "Bash", "tool_input": {"command": "helm upgrade rag-mcp ./chart -n rag"}},
+    "expected_exit": 2
+  },
+  {
+    "name": "verify-infra-target: verify_action declared target ALLOWS",
+    "hook": "verify-infra-target.sh",
+    "prompt": "nothing",
+    "rag_calls": [],
+    "verify_actions": [
+      {"intent": "roll rag-mcp after privacy mode shipped",
+       "targets": ["helm_release:rag-mcp", "k8s_namespace:rag"]}
+    ],
+    "tool_input": {"tool_name": "Bash", "tool_input": {"command": "helm upgrade rag-mcp ./chart -n rag"}},
+    "expected_exit": 0
+  },
+
+  {
+    "name": "block-destructive Phase 4: oc rollout restart sts/dragonfly BLOCKS",
+    "hook": "block-destructive.sh",
+    "prompt": "anything",
+    "rag_calls": [],
+    "verify_actions": [],
+    "tool_input": {"tool_name": "Bash", "tool_input": {"command": "oc rollout restart sts/dragonfly -n dragonfly"}},
+    "expected_exit": 2
+  },
+  {
+    "name": "block-destructive Phase 4: systemctl restart rag-event-collector BLOCKS",
+    "hook": "block-destructive.sh",
+    "prompt": "anything",
+    "rag_calls": [],
+    "verify_actions": [],
+    "tool_input": {"tool_name": "Bash", "tool_input": {"command": "systemctl restart rag-event-collector.service"}},
+    "expected_exit": 2
+  },
+  {
+    "name": "block-destructive Phase 4: docker compose down against prod file BLOCKS",
+    "hook": "block-destructive.sh",
+    "prompt": "anything",
+    "rag_calls": [],
+    "verify_actions": [],
+    "tool_input": {"tool_name": "Bash", "tool_input": {"command": "docker compose -f /etc/docker-compose.yml down"}},
+    "expected_exit": 2
+  },
+  {
+    "name": "block-destructive Phase 4: atlas playbook harbor BLOCKS",
+    "hook": "block-destructive.sh",
+    "prompt": "anything",
+    "rag_calls": [],
+    "verify_actions": [],
+    "tool_input": {"tool_name": "Bash", "tool_input": {"command": "atlas playbook harbor-deploy.yml"}},
+    "expected_exit": 2
+  },
+  {
+    "name": "block-destructive Phase 4: helm list (read-only) ALLOWS",
+    "hook": "block-destructive.sh",
+    "prompt": "anything",
+    "rag_calls": [],
+    "verify_actions": [],
+    "tool_input": {"tool_name": "Bash", "tool_input": {"command": "helm list -n rag"}},
+    "expected_exit": 0
+  },
+  {
+    "name": "block-destructive Phase 4: verify_action allows yank",
+    "hook": "block-destructive.sh",
+    "prompt": "anything",
+    "rag_calls": [],
+    "verify_actions": [
+      {"intent": "restart event collector to pick up new config",
+       "targets": ["systemd_unit:rag-event-collector.service"]}
+    ],
+    "tool_input": {"tool_name": "Bash", "tool_input": {"command": "systemctl restart rag-event-collector.service"}},
+    "expected_exit": 0
+  },
+  {
+    "name": "block-destructive: rm -rf still fires (existing pattern)",
+    "hook": "block-destructive.sh",
+    "prompt": "anything",
+    "rag_calls": [],
+    "verify_actions": [],
+    "tool_input": {"tool_name": "Bash", "tool_input": {"command": "rm -rf /etc/foo"}},
+    "expected_exit": 2
+  },
+
+  {
+    "name": "require-rag-pretooluse: Edit Atlas role with no rag BLOCKS",
+    "hook": "require-rag-pretooluse.sh",
+    "prompt": "",
+    "rag_calls": [],
+    "verify_actions": [],
+    "tool_input": {"tool_name": "Edit", "tool_input": {"file_path": "/home/forgemaster/Atlas/roles/dragonfly/tasks/main.yml", "old_string": "a", "new_string": "b"}},
+    "expected_exit": 2
+  },
+  {
+    "name": "require-rag-pretooluse: Edit Atlas role with rag RESULT mentions ALLOWS",
+    "hook": "require-rag-pretooluse.sh",
+    "prompt": "",
+    "rag_calls": [
+      ["RESULT", "Documents about dragonfly chart and helm values"]
+    ],
+    "verify_actions": [],
+    "tool_input": {"tool_name": "Edit", "tool_input": {"file_path": "/home/forgemaster/Atlas/roles/dragonfly/tasks/main.yml", "old_string": "a", "new_string": "b"}},
+    "expected_exit": 0
+  },
+  {
+    "name": "require-rag-pretooluse: Edit scratch /tmp ALLOWS",
+    "hook": "require-rag-pretooluse.sh",
+    "prompt": "",
+    "rag_calls": [],
+    "verify_actions": [],
+    "tool_input": {"tool_name": "Edit", "tool_input": {"file_path": "/tmp/foo.txt", "old_string": "a", "new_string": "b"}},
+    "expected_exit": 0
+  },
+  {
+    "name": "require-rag-pretooluse: Read free pass",
+    "hook": "require-rag-pretooluse.sh",
+    "prompt": "",
+    "rag_calls": [],
+    "verify_actions": [],
+    "tool_input": {"tool_name": "Read", "tool_input": {"file_path": "/home/forgemaster/Atlas/roles/dragonfly/tasks/main.yml"}},
+    "expected_exit": 0
+  }
+]

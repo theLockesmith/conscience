@@ -30,9 +30,13 @@ hooks:
       commands:
         - "$HOME/.claude/hooks/enforce-user-directives.sh"
         - "$HOME/.claude/hooks/block-session-killers.sh"
+        # V17 Phase 7: verify-infra-target runs BEFORE block-destructive so
+        # the target-aware gate (Phase 3) gets first say, and Phase 4's
+        # shared-service-yank category acts as a fall-through defense in
+        # depth rather than the only thing fired.
+        - "$HOME/.claude/hooks/verify-infra-target.sh"
         - "$HOME/.claude/hooks/block-destructive.sh"
         - "$HOME/.claude/hooks/block-secrets.sh"
-        - "$HOME/.claude/hooks/verify-infra-target.sh"
         - "$HOME/.claude/hooks/unknown-tool-detector.sh"
         - "$HOME/.claude/hooks/enforce-tool-rules.sh"
         - "$HOME/.claude/hooks/warn-network-egress.sh"
@@ -90,6 +94,12 @@ hooks:
       commands:
         - "$HOME/.claude/hooks/validate-learning-source.sh"
       timeout: 5
+    # DATA SOVEREIGNTY - Block writes whose company arg belongs to a different
+    # surface than the target MCP server (multi-instance RAG; registry-driven)
+    - matcher: "mcp__.*__log_(decision|learning)"
+      commands:
+        - "$HOME/.claude/hooks/enforce-surface-routing.sh"
+      timeout: 5
   # Response validation (rule enforcement) + context extraction + session hygiene + QUALITY ENFORCEMENT
   # Context extraction only runs when context usage > 70% (checked via transcript file size)
   # Quality enforcer BLOCKS half-assed work, deferrals, and missing RAG logging
@@ -100,6 +110,7 @@ hooks:
   # RAG GIVEUP ENFORCEMENT - Blocks "can't/not available" unless RAG was searched first
   Stop:
     - commands:
+        - "$HOME/.claude/hooks/block-slur-deflection.sh"
         - "$HOME/.claude/hooks/enforce-rag-post-compaction.sh"
         - "$HOME/.claude/hooks/enforce-rag-before-giveup.sh"
         - "$HOME/.claude/hooks/enforce-question-answering.sh"
@@ -129,6 +140,8 @@ hooks:
         - "$HOME/.claude/hooks/agent-triggers.sh"
         - "$HOME/.claude/hooks/workflow-detector.sh"
         - "$HOME/.claude/hooks/multi-session-context.sh"
+        # Type 2 coordination: surface relevant peer-stream activity via MCP (advisory)
+        - "$HOME/.claude/hooks/coord-stream-inject.sh"
       timeout: 10
   # Notification on subagent completion
   SubagentStop:
@@ -148,6 +161,8 @@ hooks:
         - "$HOME/.claude/hooks/sanitize-output.sh"
         - "$HOME/.claude/hooks/weekly-update-reminder.sh"
         - "$HOME/.claude/hooks/session-source-tracker.sh"
+        # Type 2 coordination: capture git commits into the peer-stream feed via MCP (advisory)
+        - "$HOME/.claude/hooks/coord-stream-capture.sh"
       timeout: 10
     - matcher: "Read"
       commands:
@@ -163,6 +178,11 @@ hooks:
       commands:
         - "$HOME/.claude/hooks/rag-call-tracker.sh"
       timeout: 5
+    # Type 2 coordination: mirror explicit decisions into the peer-stream feed via MCP (advisory)
+    - matcher: "mcp__rag__log_decision"
+      commands:
+        - "$HOME/.claude/hooks/coord-stream-decision.sh"
+      timeout: 8
   # Session start hooks (new session or after compaction)
   # CRITICAL: validate-hooks.sh MUST run first to fix permissions before other hooks
   # CRITICAL: session-health-check.sh verifies all systems are available
