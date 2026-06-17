@@ -1,120 +1,82 @@
 #!/bin/bash
-# V13 Multi-Session Coordination - Context Injection Hook
+# Multi-Session Coordination — Context Injection Hook
+# V13 + V17 Phase 11c
 #
-# Injects coordination status into user prompts so Claude is aware of:
-# - Other active sessions on the same project
-# - Pending/claimed tasks
-# - Unread messages
-# - Current role (lead/worker/independent)
-#
-# This hook runs on UserPromptSubmit.
+# Injects coordination status (other sessions on this project, pending tasks,
+# unread messages + previews) into UserPromptSubmit. The client speaks ONLY
+# MCP-over-HTTPS with a per-surface PAT — no psql / .pgpass / POSTGRES_PASSWORD.
+# Surface resolved from cwd via sr_resolve; unprovisioned surface = silent no-op.
 
-set -e
+set -uo pipefail
 
-# Read JSON input from stdin
-INPUT_JSON=$(cat)
+INPUT_JSON=$(cat || true)
 
-# Get session ID from environment or input
-SESSION_ID=$(echo "$INPUT_JSON" | jq -r '.session_id // empty')
-if [[ -z "$SESSION_ID" ]]; then
-    SESSION_ID="${LLM_SESSION_ID:-${CLAUDE_SESSION_ID:-unknown}}"
-fi
+. "$HOME/.claude/hooks/lib/surface-resolve.sh" 2>/dev/null || { echo '{"hook_result":"continue"}'; exit 0; }
 
-# Database connection
-POSTGRES_HOST="${POSTGRES_HOST:-postgres-rw.db.aegis-hq.xyz}"
-POSTGRES_PORT="${POSTGRES_PORT:-5432}"
-POSTGRES_USER="${POSTGRES_USER:-rag}"
-POSTGRES_PASSWORD="${POSTGRES_PASSWORD:?POSTGRES_PASSWORD env var required}"
-POSTGRES_DB="${POSTGRES_DB:-ragdb}"
+PROJECT_PATH="$PWD"
+RESOLVED=$(sr_resolve "$PROJECT_PATH" 2>/dev/null) || RESOLVED=""
+IFS='|' read -r SURFACE COMPANY MCP_SERVER MCP_URL TOKEN_FILE <<< "$RESOLVED"
 
-export PGPASSWORD="$POSTGRES_PASSWORD"
+trap 'echo "{\"hook_result\":\"continue\"}"' EXIT
 
-PROJECT_PATH=$(pwd)
+[[ -n "${MCP_URL:-}" && -n "${TOKEN_FILE:-}" ]] || exit 0
 
-# Skip if session not registered
-if [[ "$SESSION_ID" == "unknown" ]]; then
-    exit 0
-fi
+MC="$HOME/.claude/hooks/lib/mcp-call.sh"
 
-# Query coordination status (single query for efficiency)
-STATUS=$(psql -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -A -F'|' -c "
-WITH my_session AS (
-    SELECT role, status FROM coord_sessions WHERE session_id = '$SESSION_ID' LIMIT 1
-),
-other_sessions AS (
-    SELECT COUNT(*) as cnt FROM coord_sessions
-    WHERE project_path = '$PROJECT_PATH'
-      AND session_id != '$SESSION_ID'
-      AND status IN ('active', 'idle', 'busy')
-      AND last_heartbeat > NOW() - INTERVAL '5 minutes'
-),
-pending_tasks AS (
-    SELECT COUNT(*) as cnt FROM coord_tasks
-    WHERE project_path = '$PROJECT_PATH' AND status = 'pending'
-),
-my_tasks AS (
-    SELECT COUNT(*) as cnt FROM coord_tasks
-    WHERE claimed_by = '$SESSION_ID' AND status IN ('claimed', 'in_progress')
-),
-unread_msgs AS (
-    SELECT COUNT(*) as cnt FROM coord_messages
-    WHERE (to_session = '$SESSION_ID' OR to_session IS NULL)
-      AND project_path = '$PROJECT_PATH'
-      AND read_at IS NULL
-      AND from_session != '$SESSION_ID'
-),
-lead_session AS (
-    SELECT session_id FROM coord_sessions
-    WHERE project_path = '$PROJECT_PATH' AND role = 'lead'
-      AND status IN ('active', 'idle', 'busy')
-      AND last_heartbeat > NOW() - INTERVAL '5 minutes'
-    LIMIT 1
-)
-SELECT
-    COALESCE((SELECT role FROM my_session), 'unregistered'),
-    COALESCE((SELECT cnt FROM other_sessions), 0),
-    COALESCE((SELECT cnt FROM pending_tasks), 0),
-    COALESCE((SELECT cnt FROM my_tasks), 0),
-    COALESCE((SELECT cnt FROM unread_msgs), 0),
-    COALESCE((SELECT session_id FROM lead_session), '')
-" 2>/dev/null || echo "error|0|0|0|0|")
+# (1) Active sessions on this project: count - 1 = peers.
+SESS_ARGS=$(jq -nc --arg pp "$PROJECT_PATH" '{project_path:$pp, status:"active"}' 2>/dev/null) || exit 0
+SESS_OUT=$("$MC" "$MCP_URL" "$TOKEN_FILE" coord_list_sessions "$SESS_ARGS" 2>/dev/null) || SESS_OUT=""
+SESS_N=$(grep -oE 'Found [0-9]+' <<<"$SESS_OUT" | head -1 | grep -oE '[0-9]+' || true)
+[[ -n "$SESS_N" ]] || SESS_N=0
+PEERS=$(( SESS_N > 0 ? SESS_N - 1 : 0 ))
 
-# Parse results
-IFS='|' read -r ROLE OTHER_SESSIONS PENDING_TASKS MY_TASKS UNREAD_MSGS LEAD_ID <<< "$STATUS"
+# (2) Pending tasks.
+TASK_ARGS='{"status":"pending","limit":50}'
+TASK_OUT=$("$MC" "$MCP_URL" "$TOKEN_FILE" coord_list_tasks "$TASK_ARGS" 2>/dev/null) || TASK_OUT=""
+PEND_N=$(grep -oE 'Found [0-9]+' <<<"$TASK_OUT" | head -1 | grep -oE '[0-9]+' || true)
+[[ -n "$PEND_N" ]] || PEND_N=0
 
-# Only inject context if there's something notable
-if [[ "$OTHER_SESSIONS" -gt 0 || "$PENDING_TASKS" -gt 0 || "$UNREAD_MSGS" -gt 0 || "$ROLE" == "lead" ]]; then
+# (3) Unread messages for this session.
+MSG_ARGS='{"unread_only":true,"limit":20}'
+MSG_OUT=$("$MC" "$MCP_URL" "$TOKEN_FILE" coord_get_messages "$MSG_ARGS" 2>/dev/null) || MSG_OUT=""
+UNREAD_N=$(grep -oE 'Messages \([0-9]+\)' <<<"$MSG_OUT" | head -1 | grep -oE '[0-9]+' || true)
+[[ -n "$UNREAD_N" ]] || UNREAD_N=0
+
+if [[ "$PEERS" -gt 0 || "$PEND_N" -gt 0 || "$UNREAD_N" -gt 0 ]]; then
     echo "<multi-session-status>"
+    echo "Surface: $SURFACE"
+    [[ "$PEERS"   -gt 0 ]] && echo "Other sessions on this project: $PEERS"
+    [[ "$PEND_N"  -gt 0 ]] && echo "Pending tasks: $PEND_N (use coord_claim_task)"
+    [[ "$UNREAD_N" -gt 0 ]] && echo "Unread messages: $UNREAD_N (use coord_get_messages)"
 
-    # Role
-    if [[ "$ROLE" == "lead" ]]; then
-        echo "Role: LEAD (you orchestrate workers)"
-    elif [[ -n "$LEAD_ID" && "$LEAD_ID" != "$SESSION_ID" ]]; then
-        echo "Role: worker (lead: ${LEAD_ID:0:8}...)"
-    else
-        echo "Role: $ROLE"
+    # Phase 11c: surface unread message previews so the assistant sees what
+    # came in without having to explicitly call coord_get_messages. Walk the
+    # markdown coord_get_messages emits and extract subject + sender prefix
+    # + first body line (~110 chars) for up to 5 messages.
+    if [[ "$UNREAD_N" -gt 0 && -n "$MSG_OUT" ]]; then
+        echo "Unread previews:"
+        echo "$MSG_OUT" | awk '
+            BEGIN { state = 0; n = 0; subj = ""; sender_short = "" }
+            /^### \[/ {
+                if (match($0, /\*\*(.+)\*\*[[:space:]]+from[[:space:]]+`([^`]+)`/, m)) {
+                    subj = m[1]
+                    sender_short = substr(m[2], 1, 8)
+                } else {
+                    subj = "(no-subject)"
+                    sender_short = "????????"
+                }
+                state = 1
+                next
+            }
+            state == 1 && /^ID: `/ { state = 2; next }
+            state == 2 && length($0) > 0 && $0 !~ /^[[:space:]]*$/ {
+                preview = substr($0, 1, 110)
+                printf "  - [%s] %s\n    %s\n", sender_short, subj, preview
+                n += 1
+                if (n >= 5) exit
+                state = 0
+            }
+        '
     fi
-
-    # Other sessions
-    if [[ "$OTHER_SESSIONS" -gt 0 ]]; then
-        echo "Active sessions: $((OTHER_SESSIONS + 1)) (including you)"
-    fi
-
-    # Tasks
-    if [[ "$PENDING_TASKS" -gt 0 ]]; then
-        echo "Pending tasks: $PENDING_TASKS (use coord_claim_task)"
-    fi
-    if [[ "$MY_TASKS" -gt 0 ]]; then
-        echo "Your claimed tasks: $MY_TASKS"
-    fi
-
-    # Messages
-    if [[ "$UNREAD_MSGS" -gt 0 ]]; then
-        echo "Unread messages: $UNREAD_MSGS (use coord_get_messages)"
-    fi
-
     echo "</multi-session-status>"
 fi
-
-# Always continue
-echo '{"hook_result": "continue"}'
