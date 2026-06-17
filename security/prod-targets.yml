@@ -31,14 +31,46 @@ prod_helm_releases:
 # -----------------------------------------------------------------------------
 prod_k8s_namespaces:
   atlantis:
-    - harbor
-    - dragonfly
-    - rag
-    - postgresql
-    - bitcoin
+    # Platform / OpenShift core
     - kube-system
     - openshift-*           # any openshift-system namespace
     - default
+    - kube-node-lease
+    - kube-public
+    - kube-descheduler
+    - kube-state-metrics
+    # GitOps + CI
+    - argocd
+    - gitlab-system
+    - gitlab-builds
+    - harbor
+    - k8s-image-puller
+    # Auth + identity
+    - active-directory
+    - bastion
+    - keycloak
+    - cert-manager
+    - mas
+    # Databases / state
+    - postgresql
+    - cnpg-system
+    - dragonfly
+    - dragonfly-operator-system
+    # Apps / surfaces
+    - rag
+    - cloistr
+    - bitcoin
+    - home-assistant
+    - invoice-ninja
+    - kimai
+    - firefly
+    # Observability + policy
+    - grafana
+    - loki
+    - langfuse
+    - external-monitoring
+    - monitoring
+    - kyverno
   pantheon:
     - "*"                   # everything in pantheon is treated as prod
 
@@ -76,6 +108,104 @@ prod_ssh_hosts:
   - bastion.aegis-hq.xyz
   - atlantis-*                        # any atlantis node
   - pantheon-*                        # any pantheon node
+
+# -----------------------------------------------------------------------------
+# K8s contexts (the cluster the call lands against)
+# Match shape: k8s_context:<ctx>
+# Implied by aliases like oc-atlantis / oc-pantheon (see target-extract.sh).
+# -----------------------------------------------------------------------------
+prod_k8s_contexts:
+  - atlantis
+  - pantheon
+
+# -----------------------------------------------------------------------------
+# Atlas roles (Ansible-Atlas: provisioning role names)
+# Match shape: atlas_role:<name>
+# Convention: anything not in dev_only_roles is prod.
+# -----------------------------------------------------------------------------
+prod_atlas_roles:
+  prod:
+    - active_directory
+    - ad_management
+    - amp
+    - bitcoin-node
+    - ceph
+    - database_dns
+    - database_lb
+    - db-host-baseline
+    - etcd
+    - haproxy
+    - harbor-k8s
+    - harbor-vm
+    - host-baseline
+    - jump_proxy
+    - kolla
+    - kube
+    - kube/*                          # any kube/<service> sub-role
+    - mariadb
+    - monitoring
+    - mysql
+    - nginx_proxy
+    - openstack-host-overrides
+    - os_images
+    - postgres-rotate-rag-mcp
+    - postgres
+  dev_only:
+    # Roles intentionally NOT prod — apply freely without verify_action.
+    - dotfiles
+    - branding
+
+# -----------------------------------------------------------------------------
+# Atlas plays (top-level playbook paths invoked via `atlas-play <path>`)
+# Match shape: atlas_play:<path>
+# -----------------------------------------------------------------------------
+prod_atlas_plays:
+  - playbooks/site.yml
+  - playbooks/openshift-kubelet-config.yml
+  - playbooks/harbor-deploy.yml
+  - playbooks/openstack-deploy.yml
+
+# -----------------------------------------------------------------------------
+# Ansible plays (raw ansible-playbook invocations, outside the Atlas wrapper)
+# Match shape: ansible_play:<path>
+# Almost any ansible-playbook against a prod inventory is prod.
+# -----------------------------------------------------------------------------
+prod_ansible_plays:
+  prod_path_globs:
+    - "*Atlas*playbooks/*"
+    - "*atlas*playbooks/*"
+
+# -----------------------------------------------------------------------------
+# File paths (shared/prod paths on the workstation or fanned-out via SSH)
+# Match shape: file_path:<path>
+# Wildcards: trailing '*' = glob match
+# -----------------------------------------------------------------------------
+prod_file_paths:
+  # System config — touching these can break the workstation
+  - /etc/*
+  - /var/lib/containers/*
+  - /var/log/*
+  - /usr/local/bin/*
+  - /usr/local/sbin/*
+  - /lib/systemd/system/*
+  - /etc/systemd/system/*
+  - /etc/netplan/*
+  - /etc/udev/rules.d/*
+  # Operator's identity + secrets — never just mv/chmod these casually
+  - ~/.ssh/*
+  - ~/.config/rag-mcp/*
+  - ~/.arbiter/secrets/*
+  - ~/.arbiter/profiles/*
+  - ~/.gnupg/*
+  - ~/.kube/*
+  # Claude harness — operator-shared state
+  - ~/.claude/security/*
+  - ~/.claude/hooks/*
+  - ~/.claude/skills/*
+  - ~/.claude/projects/*/memory/*
+  - ~/.mcp.json
+  # rag-sync working state
+  - /var/lib/rag-sync/*
 
 # -----------------------------------------------------------------------------
 # Verbs that count as "yanking" a prod target (Phase 4)
@@ -131,3 +261,18 @@ yank_verbs:
     - kube_apply
     - kube_delete
     - playbook
+  # File ops emitted by target-extract.sh as file_path:<path> (added 2026-06-17
+  # with the V17 Phase 1 file_path extraction). Mutating verbs only; read-only
+  # commands (cat/head/tail/less) intentionally do not emit a file_path.
+  file:
+    - rm
+    - mv
+    - cp
+    - ln
+    - chmod
+    - chown
+    - chgrp
+    - touch
+    - truncate
+    - tee
+    - sed              # extractor only emits file_path for `sed -i`
