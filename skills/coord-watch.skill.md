@@ -66,9 +66,35 @@ unaffected by the watch loop.
 
 ## Safety bounds
 
-Per `~/.claude/commands/coord-watch.md` — DRAFT + SURFACE + STOP for any
-destructive action; exit on operator interjection; STOP-COUNTER at 5
-autonomous exchanges; STOP-WALLCLOCK at 10 minutes.
+Exit on operator interjection (always). STOP-COUNTER at 5 autonomous
+exchanges; STOP-WALLCLOCK at 10 minutes.
+
+**DRAFT vs APPLY split** (refined 2026-06-17 after the harbor-probe
+investigation). The old rule "DRAFT + SURFACE + STOP for any destructive
+action" was over-tight: it treated *producing a file diff* the same as
+*executing a destructive command*. The two are different, and conflating
+them killed the coord session at every artifact.
+
+- **DRAFT is autonomous.** Producing file diffs, committing on a
+  feature branch in the local working tree, posting the diff in the
+  room — none of those mutate shared state. Continue the loop. Multiple
+  drafts in one session are fine. Do NOT exit.
+
+- **APPLY is STOP.** Running a command that mutates production-shared
+  state — `atlas playbook`, `atlas kube apply`, `helm upgrade`,
+  `kubectl/oc apply` against prod, `git push` to a shared remote,
+  secret rotation, `kubectl delete` against prod resources, anything
+  on the global CLAUDE.md "Never Do These" list — that's the STOP
+  boundary. Surface the proposed apply command in the room, exit
+  coord-watch as a hard checkpoint, wait for operator go-ahead in
+  this terminal before the apply runs.
+
+When in doubt: ask "if this action turns out wrong, is it reversible
+without operator help and without notifying anyone outside this room?"
+Yes → DRAFT, continue. No → APPLY, STOP.
+
+Per `~/.claude/commands/coord-watch.md` for the full destructive-action
+inventory.
 
 ## Cost
 
