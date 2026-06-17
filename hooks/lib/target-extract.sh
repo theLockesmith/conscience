@@ -221,9 +221,34 @@ _te_process_segment() {
             [[ -n "$host" ]] && printf 'ssh_host:%s\n' "$host"
             ;;
         atlas)
-            # atlas <role-or-play>  -- conservatively emit as atlas_role
-            local arg="${argv[1]:-}"
-            [[ -n "$arg" && "$arg" != -* ]] && printf 'atlas_role:%s\n' "$arg"
+            # Atlas has a small number of subcommand shapes:
+            #   atlas <role-name>               → atlas_role:<role-name>
+            #   atlas kube <verb> <component>   → atlas_role:kube/<component>
+            #   atlas playbook <path>           → atlas_play:<path>
+            local sub="${argv[1]:-}"
+            case "$sub" in
+                "" | -*) ;;
+                kube)
+                    # atlas kube <verb> <component>
+                    local kverb="${argv[2]:-}"
+                    local kcomp="${argv[3]:-}"
+                    case "$kverb" in
+                        apply|delete|status|diff|describe)
+                            [[ -n "$kcomp" && "$kcomp" != -* ]] && \
+                                printf 'atlas_role:kube/%s\n' "$kcomp"
+                            ;;
+                    esac
+                    ;;
+                playbook)
+                    # atlas playbook <path-or-name>
+                    local pb="${argv[2]:-}"
+                    [[ -n "$pb" && "$pb" != -* ]] && \
+                        printf 'atlas_play:%s\n' "$pb"
+                    ;;
+                *)
+                    printf 'atlas_role:%s\n' "$sub"
+                    ;;
+            esac
             ;;
         atlas-play|atlas_play)
             local arg="${argv[1]:-}"

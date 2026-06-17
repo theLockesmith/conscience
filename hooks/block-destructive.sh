@@ -178,6 +178,52 @@ if echo "$COMMAND_BEFORE_HEREDOC" | grep -qE '>>?[[:space:]]*(/etc/|/var/|/usr/|
     exit 2
 fi
 
+# --- Bash writes to sensitive paths (parity with Edit/Write guard) ---
+# restrict-sensitive-paths.sh blocks the Edit/Write tool family; without this
+# matcher, anyone can swap "Edit ~/.ssh/id_rsa" for "echo X > ~/.ssh/id_rsa"
+# and walk past the guard. Covers redirects, tee, cp/mv, sed -i, and
+# scripted-language file-open writes against the same protected list.
+
+_SENS_PATH='(\$HOME|~|/home/[^/]+)/\.(ssh|gnupg|kube/config|aws|azure|gcloud|secrets)(/|$|[[:space:]])'
+_SENS_PATH+='|/etc/(shadow|passwd|sudoers|gshadow|systemd/system)'
+_SENS_PATH+='|(^|[[:space:]/])(\.env(\.[^[:space:]]+)?|secrets\.ya?ml|vault\.ya?ml|credentials\.json|id_rsa|id_ed25519|id_ecdsa|\.netrc|\.npmrc|\.pypirc|\.docker/config\.json)([[:space:]]|$)'
+_SENS_PATH+='|\.pem([[:space:]"'"'"']|$)|\.key([[:space:]"'"'"']|$)'
+
+# Redirect to sensitive path: `cmd > path` / `cmd >> path`
+if echo "$CMD_FOR_REGEX" | grep -qE ">>?[[:space:]]*[^[:space:];|&]*($_SENS_PATH)"; then
+    echo "BLOCKED: Shell redirect to a sensitive path detected. Same protection class as Edit/Write tool — use that path with explicit approval, or work in a non-sensitive location." >&2
+    exit 2
+fi
+
+# tee writing to sensitive path
+if echo "$CMD_FOR_REGEX" | grep -qE '\b(sudo[[:space:]]+)?tee([[:space:]]+-[a-z]+)*[[:space:]]+[^[:space:];|&]*('"$_SENS_PATH"')'; then
+    echo "BLOCKED: tee to a sensitive path detected. Same protection class as Edit/Write tool — get explicit approval." >&2
+    exit 2
+fi
+
+# cp / mv / install where any argument is a sensitive path (either src or
+# dest is a concern — write-to-sensitive is the parity gap; read-from is
+# the data-exfil gap. Block either; operator can carve out narrow cases.)
+if echo "$CMD_FOR_REGEX" | grep -qE '\b(sudo[[:space:]]+)?(cp|mv|install)\b' && \
+   echo "$CMD_FOR_REGEX" | grep -qE "$_SENS_PATH"; then
+    echo "BLOCKED: cp/mv/install touching a sensitive path detected. Same protection class as Edit/Write tool — get explicit approval." >&2
+    exit 2
+fi
+
+# sed -i / --in-place on sensitive path
+if echo "$CMD_FOR_REGEX" | grep -qE '\bsed\b[^|;&]*(-i|--in-place)[^|;&]*('"$_SENS_PATH"')'; then
+    echo "BLOCKED: sed -i on a sensitive path detected. Same protection class as Edit/Write tool — get explicit approval." >&2
+    exit 2
+fi
+
+# Scripted file-open in -c/-e payload that targets a sensitive path
+if echo "$CMD_FOR_REGEX" | grep -qE '\b(python3?|node|ruby|perl)[[:space:]]+(-c|-e)[^|;&]*(open|File\.open|File\.write)[^|;&]*('"$_SENS_PATH"')'; then
+    echo "BLOCKED: Scripted file-open targeting a sensitive path detected. Same protection class as Edit/Write tool — get explicit approval." >&2
+    exit 2
+fi
+
+
+
 # --- Scripted destructive in -c / -e payloads (python/perl/node/ruby) ---
 # These bypass plain rm/dropdb pattern matching by going through language APIs.
 # Matches by method-call shape (`.verb(`) so it catches both `os.unlink(x)` and
@@ -253,6 +299,185 @@ fi
 if echo "$CMD_FOR_REGEX" | grep -qE 'git\s+push\s+.*-f($|\s)' && ! echo "$COMMAND" | grep -q '\-\-force-with-lease'; then
     echo "BLOCKED: git push -f (force push). Use --force-with-lease, or get explicit user approval." >&2
     exit 2
+fi
+
+# =============================================================================
+# V17 PHASE 4: SHARED-SERVICE YANK
+# =============================================================================
+# Catches verbs of *change* against prod targets (helm upgrade, oc rollout,
+# systemctl restart, docker compose down, ...). Complements the literal-
+# destructive checks above which catch deletion-shape verbs (rm -rf, kubectl
+# delete, --force, ...). Defense-in-depth with verify-infra-target.sh: that
+# hook is the general-target gate, this one is the named-and-known-as-prod
+# fast path.
+#
+# Bypass: CLAUDE_PROD_OVERRIDE=<token> (logged loudly to audit.log).
+# -----------------------------------------------------------------------------
+
+if [[ -f "$HOME/.claude/hooks/lib/target-extract.sh" \
+   && -f "$HOME/.claude/hooks/lib/prod-target-match.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "$HOME/.claude/hooks/lib/target-extract.sh"
+    # shellcheck disable=SC1091
+    source "$HOME/.claude/hooks/lib/prod-target-match.sh"
+
+    if pt_load_manifest 2>/dev/null; then
+        # Resolve the first non-sudo word of every pipeline segment to a tool
+        # name, and pair it with its verb. We re-use extract_targets only to
+        # know that there IS a touchable target; verb extraction is local
+        # because target-extract.sh doesn't expose the verb.
+        _bdsy_segments=$(printf '%s' "$CMD_FOR_REGEX" | tr ';|&' '\n')
+        _bdsy_targets=$(extract_targets "$CMD_FOR_REGEX" | sort -u)
+
+        # Build prod target list once
+        _bdsy_prod_targets=()
+        while IFS= read -r _t; do
+            [[ -z "$_t" ]] && continue
+            if pt_is_prod_target "$_t"; then
+                _bdsy_prod_targets+=("$_t")
+            fi
+        done <<< "$_bdsy_targets"
+
+        if [[ ${#_bdsy_prod_targets[@]} -gt 0 ]]; then
+            # Walk segments, find (tool, verb) pairs that intersect yank_verbs.
+            _bdsy_blocked=""
+            while IFS= read -r _seg; do
+                _seg="${_seg## }"
+                [[ -z "$_seg" ]] && continue
+                # Strip sudo + leading flags conservatively
+                _seg="${_seg#sudo }"
+                # shellcheck disable=SC2206
+                _toks=( $_seg )
+                _first="${_toks[0]:-}"
+                _second="${_toks[1]:-}"
+                # Resolve aliases
+                case "$_first" in
+                    oc-atlantis|oc-pantheon|kubectl-atlantis|kubectl-pantheon) _first="oc" ;;
+                    kc|k) _first="kubectl" ;;
+                    docker-compose) _first="docker_compose"; _v="$_second" ;;
+                esac
+                # docker compose <verb>
+                _verb=""
+                _tool=""
+                case "$_first" in
+                    helm)           _tool="helm"; _verb="$_second" ;;
+                    kubectl)        _tool="kubectl"; _verb="$_second" ;;
+                    oc)             _tool="oc"; _verb="$_second" ;;
+                    systemctl)
+                        _tool="systemctl"
+                        # Skip --user/--system style flags before verb
+                        for _t in "${_toks[@]:1}"; do
+                            case "$_t" in
+                                --user|--system|--no-block|--no-pager|--quiet|-q) continue ;;
+                                -*) continue ;;
+                                *) _verb="$_t"; break ;;
+                            esac
+                        done
+                        ;;
+                    docker)
+                        if [[ "$_second" == "compose" ]]; then
+                            _tool="docker_compose"
+                            # find first non-flag arg after `compose` (and skip
+                            # `-f <file>`)
+                            _i=2
+                            while [[ $_i -lt ${#_toks[@]} ]]; do
+                                _t="${_toks[$_i]}"
+                                case "$_t" in
+                                    -f|--file) _i=$((_i+2)); continue ;;
+                                    --file=*) _i=$((_i+1)); continue ;;
+                                    -*) _i=$((_i+1)); continue ;;
+                                    *) _verb="$_t"; break ;;
+                                esac
+                            done
+                        fi
+                        ;;
+                    docker_compose) _tool="docker_compose"; _verb="$_second" ;;
+                    atlas)
+                        _tool="atlas"
+                        # Map second arg to the manifest's symbolic verb
+                        case "$_second" in
+                            kube)
+                                _third="${_toks[2]:-}"
+                                case "$_third" in
+                                    apply)  _verb="kube_apply" ;;
+                                    delete) _verb="kube_delete" ;;
+                                esac
+                                ;;
+                            playbook) _verb="playbook" ;;
+                        esac
+                        ;;
+                    rm|mv|cp|ln|chmod|chown|chgrp|touch|truncate|tee|sed)
+                        _tool="file"; _verb="$_first"
+                        ;;
+                esac
+
+                [[ -z "$_tool" || -z "$_verb" ]] && continue
+                if pt_is_yank_verb "$_tool" "$_verb"; then
+                    _bdsy_blocked="${_bdsy_blocked}${_tool}:${_verb}\n"
+                fi
+            done <<< "$_bdsy_segments"
+
+            if [[ -n "$_bdsy_blocked" ]]; then
+                # Honor bypass envvar (logged)
+                BYPASS="${CLAUDE_PROD_OVERRIDE:-}"
+                if [[ -n "$BYPASS" ]]; then
+                    pt_audit_log "[BYPASS-USED]" \
+                        "block-destructive shared-service-yank CLAUDE_PROD_OVERRIDE=$BYPASS cmd=$(echo "$COMMAND" | head -c 200)"
+                fi
+                # Check whether there's a verify_action this turn covering ALL prod
+                # targets. If so, allow. (verify-infra-target.sh gates more
+                # finely; here we accept the same evidence to keep the
+                # interfaces consistent.)
+                _verify_file="$HOME/.claude/session-state/verify-actions-this-turn.jsonl"
+                _all_verified=1
+                for _entry in "${_bdsy_prod_targets[@]}"; do
+                    _verified=0
+                    if [[ -f "$_verify_file" ]]; then
+                        while IFS= read -r _line; do
+                            [[ -z "$_line" ]] && continue
+                            if echo "$_line" | jq -e --arg t "$_entry" \
+                                'any(.targets[]?; . == $t)' >/dev/null 2>&1; then
+                                _verified=1; break
+                            fi
+                        done < "$_verify_file"
+                    fi
+                    # bypass token equal to value
+                    _val="${_entry#*:}"
+                    [[ -n "$BYPASS" && "$BYPASS" == "$_val" ]] && _verified=1
+                    if [[ "$_verified" == "0" ]]; then _all_verified=0; break; fi
+                done
+
+                if [[ "$_all_verified" == "0" ]]; then
+                    {
+                        printf 'BLOCKED: shared-service yank against PROD target(s):\n'
+                        for _entry in "${_bdsy_prod_targets[@]}"; do
+                            printf '  - %s\n' "$_entry"
+                        done
+                        printf 'yank verbs detected: '
+                        printf '%b' "$_bdsy_blocked" | tr '\n' ',' | sed 's/,$//'
+                        cat <<'YANK_EOF'
+
+This category fires when a "verb of change" (helm upgrade, oc rollout,
+systemctl restart, docker compose down, file rm/mv/chmod, ...) targets
+a service named in ~/.claude/security/prod-targets.yml.
+
+To proceed, EITHER:
+  - Call mcp__rag__verify_action(intent="<what>", targets=["<entry>"]) for
+    each prod target above, or
+  - Set CLAUDE_PROD_OVERRIDE=<token> in the env to bypass for a single run.
+    The bypass is logged to ~/.claude/security/audit.log.
+
+This is V17 Phase 4. Defense-in-depth with verify-infra-target.sh
+(Phase 3); both running gives belt-and-suspenders coverage.
+YANK_EOF
+                    } >&2
+                    pt_audit_log "[BLOCK]" \
+                        "block-destructive shared-service-yank targets=$(IFS=,; echo "${_bdsy_prod_targets[*]}") cmd=$(echo "$COMMAND" | head -c 200)"
+                    exit 2
+                fi
+            fi
+        fi
+    fi
 fi
 
 # =============================================================================
