@@ -247,6 +247,108 @@ _te_process_segment() {
                 esac
             done
             ;;
+        rm|touch|truncate)
+            # Mutating commands that take a list of paths. Skip all flags
+            # (including the value-taking -t / --target-directory of touch).
+            local i=1 prev=""
+            for ((i=1; i<${#argv[@]}; i++)); do
+                tok="${argv[i]}"
+                case "$prev" in
+                    -t|--target-directory|-d|--date|-r|--reference|-s|--size)
+                        prev=""; continue ;;
+                esac
+                case "$tok" in
+                    -*) prev="$tok"; continue ;;
+                    *)  printf 'file_path:%s\n' "$tok" ;;
+                esac
+                prev=""
+            done
+            ;;
+        mv|cp|ln)
+            # `mv [opts] SRC... DST` and `cp [opts] SRC... DST` — emit
+            # every non-flag arg as a file_path. We don't try to separate
+            # source vs destination; for V17's "what does this touch" the
+            # union is what matters.
+            local i=1 prev=""
+            for ((i=1; i<${#argv[@]}; i++)); do
+                tok="${argv[i]}"
+                case "$prev" in
+                    -t|--target-directory|-S|--suffix|-Z|--context|--backup)
+                        prev=""; continue ;;
+                esac
+                case "$tok" in
+                    -*) prev="$tok"; continue ;;
+                    *)  printf 'file_path:%s\n' "$tok" ;;
+                esac
+                prev=""
+            done
+            ;;
+        chmod|chown|chgrp)
+            # First non-flag is the mode/owner/group; remaining non-flag
+            # args are file paths.
+            local i=1 saw_spec="" prev=""
+            for ((i=1; i<${#argv[@]}; i++)); do
+                tok="${argv[i]}"
+                case "$prev" in
+                    --reference) prev=""; continue ;;
+                esac
+                case "$tok" in
+                    -*) prev="$tok"; continue ;;
+                    *)
+                        if [[ -z "$saw_spec" ]]; then
+                            saw_spec=1
+                        else
+                            printf 'file_path:%s\n' "$tok"
+                        fi
+                        ;;
+                esac
+                prev=""
+            done
+            ;;
+        tee)
+            # tee [-a] file...
+            local i=1
+            for ((i=1; i<${#argv[@]}; i++)); do
+                tok="${argv[i]}"
+                case "$tok" in
+                    -*) continue ;;
+                    *)  printf 'file_path:%s\n' "$tok" ;;
+                esac
+            done
+            ;;
+        sed)
+            # Only `sed -i` mutates files; otherwise sed is read-only.
+            # Look for -i or -i<EXT> (in-place edit). When present,
+            # subsequent non-flag args after the script are file paths.
+            local has_inplace="" i=1 prev="" saw_script=""
+            for tok in "${argv[@]:1}"; do
+                case "$tok" in
+                    -i|-i*) has_inplace=1 ;;
+                esac
+            done
+            [[ -z "$has_inplace" ]] && return 0
+            for ((i=1; i<${#argv[@]}; i++)); do
+                tok="${argv[i]}"
+                case "$prev" in
+                    -e|--expression|-f|--file)
+                        # The value of -e/-f IS the script; counts as the
+                        # one bareword sed expects before file args.
+                        saw_script=1
+                        prev=""; continue ;;
+                esac
+                case "$tok" in
+                    -*) prev="$tok"; continue ;;
+                    *)
+                        if [[ -z "$saw_script" ]]; then
+                            saw_script=1
+                        else
+                            printf 'file_path:%s\n' "$tok"
+                        fi
+                        ;;
+                esac
+                prev=""
+            done
+            ;;
     esac
 }
 

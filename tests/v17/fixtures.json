@@ -192,5 +192,85 @@
     "name": "git log emits nothing",
     "cmd_b64": "Z2l0IGxvZyAtLW9uZWxpbmU=",
     "expected": []
+  },
+  {
+    "name": "rm rf path",
+    "cmd_b64": "cm0gLXJmIC90bXAvanVuaw==",
+    "expected": ["file_path:/tmp/junk"]
+  },
+  {
+    "name": "rm multiple paths",
+    "cmd_b64": "cm0gLWYgL3Zhci9sb2cvb2xkLmxvZyAvdmFyL2xvZy9vbGQyLmxvZw==",
+    "expected": ["file_path:/var/log/old.log", "file_path:/var/log/old2.log"]
+  },
+  {
+    "name": "rm with --target-directory",
+    "cmd_b64": "cm0gLXQgL3RtcCAvdmFyL2xvZy9zcGFt",
+    "expected": ["file_path:/var/log/spam"]
+  },
+  {
+    "name": "touch path",
+    "cmd_b64": "dG91Y2ggL3RtcC9tYXJrZXI=",
+    "expected": ["file_path:/tmp/marker"]
+  },
+  {
+    "name": "mv src dst",
+    "cmd_b64": "bXYgL2V0Yy9mb28uY29uZiAvZXRjL2Zvby5jb25mLmJhaw==",
+    "expected": ["file_path:/etc/foo.conf", "file_path:/etc/foo.conf.bak"]
+  },
+  {
+    "name": "cp -r src dst",
+    "cmd_b64": "Y3AgLXIgL2V0Yy9mb28gL2JhY2t1cC9mb28=",
+    "expected": ["file_path:/etc/foo", "file_path:/backup/foo"]
+  },
+  {
+    "name": "ln symlink",
+    "cmd_b64": "bG4gLXMgL2V0Yy9mb28gL2V0Yy9mb28ubGluaw==",
+    "expected": ["file_path:/etc/foo", "file_path:/etc/foo.link"]
+  },
+  {
+    "name": "chmod with mode",
+    "cmd_b64": "Y2htb2QgMDYwMCAvaG9tZS91c2VyLy5zc2gvaWRfcnNh",
+    "expected": ["file_path:/home/user/.ssh/id_rsa"]
+  },
+  {
+    "name": "chmod multiple paths",
+    "cmd_b64": "Y2htb2QgNzU1IC91c3IvbG9jYWwvYmluL2ZvbyAvdXNyL2xvY2FsL2Jpbi9iYXI=",
+    "expected": ["file_path:/usr/local/bin/foo", "file_path:/usr/local/bin/bar"]
+  },
+  {
+    "name": "chown user:group path",
+    "cmd_b64": "Y2hvd24gcm9vdDp3aGVlbCAvZXRjL3N1ZG9lcnM=",
+    "expected": ["file_path:/etc/sudoers"]
+  },
+  {
+    "name": "tee dest",
+    "cmd_b64": "dGVlIC9ldGMvY3Jvbi5kL2pvYg==",
+    "expected": ["file_path:/etc/cron.d/job"]
+  },
+  {
+    "name": "tee -a dest",
+    "cmd_b64": "dGVlIC1hIC92YXIvbG9nL2FwcC5sb2c=",
+    "expected": ["file_path:/var/log/app.log"]
+  },
+  {
+    "name": "sed -i path",
+    "cmd_b64": "c2VkIC1pIHMvZm9vL2Jhci8gL2V0Yy9mb28uY29uZg==",
+    "expected": ["file_path:/etc/foo.conf"]
+  },
+  {
+    "name": "sed no -i emits nothing",
+    "cmd_b64": "c2VkIC1lIHMvZm9vL2Jhci8gL2V0Yy9mb28uY29uZg==",
+    "expected": []
+  },
+  {
+    "name": "sed -i with -e flag",
+    "cmd_b64": "c2VkIC1pIC1lIHMvZm9vL2Jhci8gL2V0Yy9mb28uY29uZg==",
+    "expected": ["file_path:/etc/foo.conf"]
+  },
+  {
+    "name": "cat is read-only",
+    "cmd_b64": "Y2F0IC9ldGMvcGFzc3dk",
+    "expected": []
   }
 ]
