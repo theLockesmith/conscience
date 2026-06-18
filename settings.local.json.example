@@ -1,0 +1,10 @@
+{
+  "_comment": "Claude Code PER-MACHINE overrides. Copy to ~/.claude/settings.local.json (gitignored). This file overrides keys in settings.json without replacing the whole config. Use it for: enabledPlugins (per-machine plugin choices), skipDangerousModePermissionPrompt (security-sensitive toggle), any path/credential override that should NOT leave this machine. Empty {} is a perfectly valid file if you have no overrides.",
+
+  "enabledPlugins": {
+    "claude-mem@thedotmack": false,
+    "gopls-lsp@claude-plugins-official": true
+  },
+
+  "skipDangerousModePermissionPrompt": false
+}
