@@ -1,0 +1,187 @@
+# Claude Code Provider Configuration (V12 Roadmap - LLM Portability)
+# Location: ~/.claude/providers.yaml
+#
+# Enables testing different AI providers alongside Anthropic.
+# Used by claude-wrapper.sh for --provider flag functionality.
+#
+# Usage:
+#   arbiter --provider copilot    # Use GitHub Copilot
+#   arbiter --provider ollama     # Use local Ollama
+#   arbiter --provider openai     # Use OpenAI
+#   arbiter                       # Default to Anthropic
+#
+# Tier System (V12):
+#   Generic tiers map to provider-specific models:
+#   - reasoning: Complex logic, planning, architecture (opus/o1/deepseek-r1)
+#   - balanced:  General tasks, code review (sonnet/gpt-4o/qwen2.5-coder)
+#   - fast:      Simple operations, lookups (haiku/gpt-4o-mini/llama3.2:3b)
+#
+#   Legacy aliases still work: haiku→fast, sonnet→balanced, opus→reasoning
+
+# Generic tier definitions (provider-agnostic)
+tiers:
+  reasoning:
+    description: "Complex reasoning, architecture, multi-step planning"
+    aliases: ["opus", "heavy", "thinking"]
+    use_cases:
+      - "Architectural decisions"
+      - "Complex debugging"
+      - "Multi-file refactoring"
+      - "System design"
+
+  balanced:
+    description: "General tasks, code review, documentation"
+    aliases: ["sonnet", "standard", "default"]
+    use_cases:
+      - "Code review"
+      - "Documentation"
+      - "Feature implementation"
+      - "Bug fixes"
+
+  fast:
+    description: "Simple operations, lookups, formatting"
+    aliases: ["haiku", "quick", "light"]
+    use_cases:
+      - "Status checks"
+      - "Simple lookups"
+      - "Formatting"
+      - "Routine operations"
+
+providers:
+  anthropic:
+    name: "Anthropic Claude"
+    default: true
+    enabled: true
+    # Uses Max plan - no additional config needed
+    tier_mapping:
+      reasoning: ""  # Use upstream opus default
+      balanced: "claude-sonnet-4-6"
+      fast: "claude-haiku-4-5-20251001"
+    models:  # Legacy aliases (backward compatibility)
+      default: ""  # Use upstream default (no override)
+      haiku: "claude-haiku-4-5-20251001"
+      sonnet: "claude-sonnet-4-6"
+      opus: ""  # Use upstream opus default
+    notes: "Primary provider via Max subscription"
+
+  copilot:
+    name: "GitHub Copilot"
+    enabled: true
+    url: "${COPILOT_URL}"
+    api_key: "${COPILOT_API_KEY}"
+    # V15 Phase 2 -- LOCKED mapping. Copilot exposes a narrower model menu
+    # than Anthropic. The lock is deliberate: changes affect Empire-tenant
+    # default behavior and should be paired with a V15 roadmap update.
+    # Re-evaluate when Copilot ships a Sonnet/Opus-equivalent tier above 4o.
+    tier_mapping:
+      reasoning: "gpt-4o"       # No higher tier available on Copilot today
+      balanced: "gpt-4o"        # Same as reasoning -- no mid-tier exposed
+      fast: "gpt-4o-mini"
+    models:  # Legacy aliases
+      default: "gpt-4o"
+      haiku: "gpt-4o-mini"
+      sonnet: "gpt-4o"
+      opus: "gpt-4o"
+    headers:
+      User-Agent: "Claude-Wrapper/V12"
+    notes: "Empire Access corporate endpoint. Inference backend only -- no Graph/M365 access."
+
+  ollama:
+    name: "Local Ollama"
+    enabled: true
+    url: "http://10.0.4.10:11434"
+    api_version: "v1"
+    tier_mapping:
+      reasoning: "deepseek-r1:70b"   # Reasoning-focused
+      balanced: "qwen2.5-coder:7b"   # Code-focused
+      fast: "llama3.2:3b"            # Fast local model
+    models:  # Legacy aliases
+      default: "llama3.2:70b"
+      haiku: "llama3.2:3b"
+      sonnet: "qwen2.5-coder:7b"
+      opus: "deepseek-r1:70b"
+    timeout: 120  # Local models can be slower
+    notes: "Local LLM server for private/offline use"
+
+  openai:
+    name: "OpenAI GPT"
+    enabled: false  # Disabled by default (paid API)
+    url: "https://api.openai.com/v1"
+    api_key: "${OPENAI_API_KEY}"
+    tier_mapping:
+      reasoning: "o1"            # o1 for complex reasoning
+      balanced: "gpt-4o"         # gpt-4o for general tasks
+      fast: "gpt-4o-mini"        # mini for simple ops
+    models:  # Legacy aliases
+      default: "gpt-4o"
+      haiku: "gpt-4o-mini"
+      sonnet: "gpt-4o"
+      opus: "o1"
+    headers:
+      User-Agent: "Claude-Wrapper/V12"
+    notes: "Direct OpenAI API - requires paid account"
+
+# Provider selection logic
+selection:
+  default_provider: "anthropic"
+  fallback_order:
+    - "anthropic"
+    - "ollama"
+
+  # Auto-selection rules (future enhancement)
+  rules:
+    - condition: "task_type == 'code_generation'"
+      provider: "ollama"
+      model: "qwen2.5-coder:7b"
+      reason: "Local code model optimized for development"
+
+    - condition: "task_type == 'reasoning'"
+      provider: "anthropic"
+      model: "opus"
+      reason: "Best reasoning capabilities"
+
+    - condition: "cost_sensitive == true"
+      provider: "ollama"
+      reason: "No API costs for local models"
+
+# Environment variables expected
+env_vars:
+  required: []
+  optional:
+    - COPILOT_URL: "GitHub Copilot endpoint URL"
+    - COPILOT_API_KEY: "GitHub Copilot API key"
+    - OPENAI_API_KEY: "OpenAI API key"
+
+# Provider-specific features
+features:
+  anthropic:
+    - "Tool calling"
+    - "Vision (image analysis)"
+    - "Long context (200K tokens)"
+    - "Artifacts"
+
+  copilot:
+    - "Code completion"
+    - "Tool calling"
+    - "Enterprise security"
+
+  ollama:
+    - "Local/private"
+    - "No API costs"
+    - "Custom model loading"
+    - "Offline capable"
+
+  openai:
+    - "Tool calling"
+    - "Vision (image analysis)"
+    - "DALL-E integration"
+
+---
+# Configuration Version: 2.0
+# Created: 2026-05-06 (V11 Roadmap - Phase 3.1)
+# Updated: 2026-05-07 (V12 Roadmap - Phase 3: Tier Mapping)
+#
+# V2.0 Changes:
+# - Added generic tier system (reasoning/balanced/fast)
+# - Added tier_mapping to each provider
+# - Preserved legacy haiku/sonnet/opus aliases for backward compatibility
