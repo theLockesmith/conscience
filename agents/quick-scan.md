@@ -1,7 +1,7 @@
 ---
 name: quick-scan
 description: Fast initial triage for obvious issues (runs on Haiku)
-model: claude-3-5-haiku-20241022
+model: haiku
 ---
 
 # Quick Scan Agent

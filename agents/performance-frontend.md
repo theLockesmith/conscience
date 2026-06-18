@@ -2,7 +2,7 @@
 name: performance-frontend
 description: Frontend performance specialist - bundle size, rendering optimization, Core Web Vitals, lazy loading
 tools: Read, Bash, Grep, Glob
-model: claude-sonnet-4-20250514
+model: sonnet
 permissionMode: bypassPermissions
 ---
 

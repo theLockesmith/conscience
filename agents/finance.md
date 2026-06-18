@@ -1,7 +1,7 @@
 ---
 name: finance
 description: Personal finance expert (budgeting, investments, tax planning, expense tracking)
-model: claude-sonnet-4-20250514
+model: sonnet
 tools: Read, Bash, Grep, Glob, mcp__rag__search_docs, mcp__rag__search_instructions, mcp__rag__search_decisions
 ---
 

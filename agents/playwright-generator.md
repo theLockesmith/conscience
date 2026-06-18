@@ -2,7 +2,7 @@
 name: playwright-generator
 description: Generate and update Playwright E2E tests from app analysis. Use to create or fix E2E test suites.
 tools: Read, Write, Edit, Bash, Grep, Glob
-model: claude-sonnet-4-20250514
+model: sonnet
 permissionMode: bypassPermissions
 ---
 

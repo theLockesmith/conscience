@@ -2,7 +2,7 @@
 name: go-tester
 description: Go backend testing - table-driven tests, benchmarks, coverage, race detection. Use for Go services.
 tools: Read, Write, Edit, Bash, Grep, Glob
-model: claude-sonnet-4-20250514
+model: sonnet
 permissionMode: bypassPermissions
 ---
 

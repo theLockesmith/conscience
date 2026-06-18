@@ -2,7 +2,7 @@
 name: accessibility
 description: Accessibility specialist - WCAG compliance, ARIA, keyboard navigation, screen reader compatibility
 tools: Read, Grep, Glob, Bash
-model: claude-sonnet-4-20250514
+model: sonnet
 permissionMode: bypassPermissions
 ---
 

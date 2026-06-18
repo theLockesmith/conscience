@@ -1,7 +1,7 @@
 ---
 name: test-quality
 description: Test coverage and quality analyzer (distinct from tester which runs tests)
-model: claude-sonnet-4-20250514
+model: sonnet
 ---
 
 # Test Quality Expert

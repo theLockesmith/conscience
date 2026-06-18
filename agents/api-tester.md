@@ -2,7 +2,7 @@
 name: api-tester
 description: REST/GraphQL API testing - endpoints, authentication, validation, error handling. Use for backend API verification.
 tools: Read, Write, Edit, Bash, Grep, Glob
-model: claude-sonnet-4-20250514
+model: sonnet
 permissionMode: bypassPermissions
 ---
 

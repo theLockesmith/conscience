@@ -1,7 +1,7 @@
 ---
 name: systems
 description: Infrastructure and systems expert (Kubernetes, Ceph, OpenStack, networking, Linux)
-model: claude-sonnet-4-20250514
+model: sonnet
 tools: Read, Bash, Grep, Glob, mcp__rag__search_docs, mcp__rag__search_instructions, mcp__rag__search_decisions
 ---
 

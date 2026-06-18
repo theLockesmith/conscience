@@ -2,7 +2,7 @@
 name: reviewer
 description: Code quality reviewer. Use proactively after writing code to review for quality, readability, and best practices.
 tools: Read, Grep, Glob, Bash
-model: claude-sonnet-4-20250514
+model: sonnet
 permissionMode: bypassPermissions
 ---
 
