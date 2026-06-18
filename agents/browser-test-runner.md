@@ -2,7 +2,7 @@
 name: browser-test-runner
 description: Run browser-based unit tests via CLI. Use for tests requiring real browser APIs (crypto, WebGL, etc.).
 tools: Read, Write, Edit, Bash, Grep, Glob
-model: sonnet
+model: claude-sonnet-4-6
 permissionMode: bypassPermissions
 ---
 

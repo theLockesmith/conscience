@@ -2,7 +2,7 @@
 name: component-tester
 description: React component testing with Testing Library. Use for verifying React components in isolation.
 tools: Read, Write, Edit, Bash, Grep, Glob
-model: sonnet
+model: claude-sonnet-4-6
 permissionMode: bypassPermissions
 ---
 

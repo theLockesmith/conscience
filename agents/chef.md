@@ -1,7 +1,7 @@
 ---
 name: chef
 description: Culinary expert (recipes, techniques, meal planning, ingredient substitutions)
-model: haiku
+model: claude-haiku-4-5-20251001
 tools: Read, Grep, Glob, mcp__rag__search_docs, mcp__rag__search_instructions
 ---
 

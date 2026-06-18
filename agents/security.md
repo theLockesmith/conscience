@@ -2,7 +2,7 @@
 name: security
 description: Security reviewer. Use to scan code for security vulnerabilities, exposed secrets, and OWASP issues.
 tools: Read, Grep, Glob, Bash
-model: sonnet
+model: claude-sonnet-4-6
 permissionMode: bypassPermissions
 ---
 

@@ -1,7 +1,7 @@
 ---
 name: performance
 description: Performance analyzer (complexity, queries, caching)
-model: sonnet
+model: claude-sonnet-4-6
 ---
 
 # Performance Expert

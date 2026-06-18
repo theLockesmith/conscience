@@ -7,7 +7,7 @@ tools:
   - Write
   - Grep
   - Glob
-model: sonnet
+model: claude-sonnet-4-6
 ---
 
 # Site Tester Agent

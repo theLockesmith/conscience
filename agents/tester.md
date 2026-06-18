@@ -2,7 +2,7 @@
 name: tester
 description: Test runner. Use to run test suites and report results concisely.
 tools: Read, Bash, Grep, Glob
-model: haiku
+model: claude-haiku-4-5-20251001
 permissionMode: bypassPermissions
 ---
 

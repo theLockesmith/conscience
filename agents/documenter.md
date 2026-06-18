@@ -2,7 +2,7 @@
 name: documenter
 description: Documentation writer. Use to update docs, add code comments, and maintain README files.
 tools: Read, Write, Edit, Grep, Glob
-model: haiku
+model: claude-haiku-4-5-20251001
 permissionMode: bypassPermissions
 ---
 

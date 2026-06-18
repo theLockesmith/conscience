@@ -1,7 +1,7 @@
 ---
 name: backend
 description: Backend code quality reviewer (API design, error handling)
-model: sonnet
+model: claude-sonnet-4-6
 ---
 
 # Backend Expert

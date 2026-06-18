@@ -2,7 +2,7 @@
 name: test-writer
 description: Test writer. Use to write unit and integration tests for existing code.
 tools: Read, Write, Edit, Grep, Glob
-model: sonnet
+model: claude-sonnet-4-6
 permissionMode: bypassPermissions
 ---
 

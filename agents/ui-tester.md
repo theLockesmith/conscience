@@ -2,7 +2,7 @@
 name: ui-tester
 description: Frontend testing - builds, type checks, linting, unit tests, E2E tests. Use after making frontend changes.
 tools: Read, Write, Edit, Bash, Grep, Glob
-model: sonnet
+model: claude-sonnet-4-6
 permissionMode: bypassPermissions
 ---
 

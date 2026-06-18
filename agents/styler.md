@@ -2,7 +2,7 @@
 name: styler
 description: CSS/styling specialist - Tailwind, CSS modules, responsive design, design system compliance
 tools: Read, Grep, Glob, Bash
-model: sonnet
+model: claude-sonnet-4-6
 permissionMode: bypassPermissions
 ---
 

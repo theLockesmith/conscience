@@ -2,7 +2,7 @@
 name: frontend-reviewer
 description: React/frontend code reviewer specializing in component patterns, hooks, state management, and TypeScript best practices
 tools: Read, Grep, Glob, Bash
-model: sonnet
+model: claude-sonnet-4-6
 permissionMode: bypassPermissions
 ---
 

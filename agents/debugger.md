@@ -2,7 +2,7 @@
 name: debugger
 description: Bug investigator and fixer. Use when something isn't working to find root cause and fix it.
 tools: Read, Edit, Bash, Grep, Glob
-model: sonnet
+model: claude-sonnet-4-6
 permissionMode: bypassPermissions
 ---
 

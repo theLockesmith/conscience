@@ -1,7 +1,7 @@
 ---
 name: data
 description: Data engineering expert (Snowflake, ETL, SQL optimization, data modeling)
-model: sonnet
+model: claude-sonnet-4-6
 tools: Read, Bash, Grep, Glob, mcp__rag__search_docs, mcp__rag__search_instructions, mcp__rag__search_decisions
 ---
 

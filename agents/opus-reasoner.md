@@ -2,7 +2,7 @@
 name: opus-reasoner
 description: Complex architecture, multi-step reasoning, nuanced decisions. Use for heavy reasoning tasks within Sonnet sessions.
 tools: All tools
-model: opus
+model: claude-opus-4-8
 permissionMode: bypassPermissions
 ---
 

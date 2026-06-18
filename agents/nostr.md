@@ -1,7 +1,7 @@
 ---
 name: nostr
 description: Nostr protocol expert (NIPs, relay behavior, event kinds, cryptography)
-model: sonnet
+model: claude-sonnet-4-6
 tools: Read, Grep, Glob, mcp__rag__search_docs, mcp__rag__search_instructions, mcp__rag__search_decisions
 ---
 
