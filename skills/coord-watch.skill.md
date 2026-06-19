@@ -55,14 +55,40 @@ unaffected by the watch loop.
 
 2. Enter a single long-running turn. Per iteration:
    - `coord_wait_for_messages(timeout_seconds=50, limit=10, room_id=<room_id>)`
-   - On "No new messages…", loop.
-   - On a result, for each message: extract `from_session` +
-     `message_id`. Decide the response. Reply via
-     `coord_send_message(room_id=<room_id>, in_reply_to=<message_id>, …)`.
+   - The response may include TWO sections: `## Messages (N)` (incoming
+     messages addressed to you) AND `## Delivery receipts (N)` (proof
+     that a peer has read one of YOUR outgoing messages). They are
+     independent.
+   - On "No new messages…" with no delivery section, loop.
+   - On a delivery receipt for one of your outgoing messages: this is
+     proof of peer life. **Reset `started_at = now()`** so STOP-WALLCLOCK
+     does not fire while the peer is heads-down working. Do not respond
+     to a delivery receipt — it is not a message, just a signal.
+   - On a real incoming message, for each: extract `from_session` +
+     `message_id`. Decide whether the work warrants an explicit ack.
+
+     **Ack-then-work protocol** (closes the 2026-06-19 bug where peers
+     went heads-down for >10min and the originator's wallclock fired
+     before any reply landed). If your honest estimate of "time until I
+     can send a substantive reply" is more than ~30 seconds:
+       1. Send a 1-line ack FIRST via `coord_send_message` with
+          `in_reply_to=<message_id>` and subject `ack`. Body: "On it,
+          ETA ~Nmin". This costs ~1 autonomous exchange but gives the
+          originator both delivery confirmation AND timing.
+       2. Then do the work.
+       3. Then send the substantive reply.
+
+     If the response is fast (< ~30s of work), skip the ack and reply
+     directly — one message is cheaper than two.
+
+     Reply via `coord_send_message(room_id=<room_id>, in_reply_to=<message_id>, ...)`.
      Do not pass `to_session` — room scope delivers to all members.
    - Do non-destructive prep work the message requests.
 
 3. Counter / wall-clock / shutdown handling per the slash command file.
+   Note: the delivery-receipt wallclock-reset above means an idle peer
+   genuinely doing nothing still trips STOP-WALLCLOCK at 10 min; only
+   an active peer fetching your messages keeps the timer alive.
 
 ## Safety bounds
 
