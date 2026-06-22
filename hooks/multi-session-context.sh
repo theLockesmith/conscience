@@ -42,7 +42,17 @@ MSG_OUT=$("$MC" "$MCP_URL" "$TOKEN_FILE" coord_get_messages "$MSG_ARGS" 2>/dev/n
 UNREAD_N=$(grep -oE 'Messages \([0-9]+\)' <<<"$MSG_OUT" | head -1 | grep -oE '[0-9]+' || true)
 [[ -n "$UNREAD_N" ]] || UNREAD_N=0
 
-if [[ "$PEERS" -gt 0 || "$PEND_N" -gt 0 || "$UNREAD_N" -gt 0 ]]; then
+# (4) Phase 12: passive notes whose target_context matches this session's
+# working context. Pulls from coord_notes_for_me with project_path scope.
+# Topics + file_paths are not passed from the hook today (no clean way to
+# enumerate them); operators can still drop notes with project_path-only
+# matchers and they will surface here.
+NOTES_ARGS=$(jq -nc --arg pp "$PROJECT_PATH" '{project_path:$pp, limit:5}' 2>/dev/null) || NOTES_ARGS='{"limit":5}'
+NOTES_OUT=$("$MC" "$MCP_URL" "$TOKEN_FILE" coord_notes_for_me "$NOTES_ARGS" 2>/dev/null) || NOTES_OUT=""
+NOTES_N=$(grep -oE 'Passive notes \([0-9]+\)' <<<"$NOTES_OUT" | head -1 | grep -oE '[0-9]+' || true)
+[[ -n "$NOTES_N" ]] || NOTES_N=0
+
+if [[ "$PEERS" -gt 0 || "$PEND_N" -gt 0 || "$UNREAD_N" -gt 0 || "$NOTES_N" -gt 0 ]]; then
     echo "<multi-session-status>"
     echo "Surface: $SURFACE"
     [[ "$PEERS"   -gt 0 ]] && echo "Other sessions on this project: $PEERS"
@@ -72,6 +82,45 @@ if [[ "$PEERS" -gt 0 || "$PEND_N" -gt 0 || "$UNREAD_N" -gt 0 ]]; then
             state == 2 && length($0) > 0 && $0 !~ /^[[:space:]]*$/ {
                 preview = substr($0, 1, 110)
                 printf "  - [%s] %s\n    %s\n", sender_short, subj, preview
+                n += 1
+                if (n >= 5) exit
+                state = 0
+            }
+        '
+    fi
+
+    # Phase 12: surface passive notes by walking coord_notes_for_me output.
+    # Each match block in the markdown:
+    #   ### `<note_id>` [mode] **subject**
+    #   by `<sender>` at <timestamp>
+    #   (blank line)
+    #   <body, multi-line>
+    #   (blank line)
+    #   _dismiss: coord_note_dismiss(note_id="<id>")_
+    if [[ "$NOTES_N" -gt 0 && -n "$NOTES_OUT" ]]; then
+        echo "Passive notes for this context: $NOTES_N (use coord_note_dismiss when done)"
+        echo "$NOTES_OUT" | awk '
+            BEGIN { state = 0; n = 0; subj = ""; mode = ""; nid_short = "" }
+            /^### `/ {
+                # parse: ### `<note_id>` [<mode>] **<subject>**
+                if (match($0, /`([^`]+)`[[:space:]]+\[([a-z]+)\][[:space:]]+\*\*(.+)\*\*/, m)) {
+                    nid_short = substr(m[1], 1, 8)
+                    mode = m[2]
+                    subj = m[3]
+                } else {
+                    nid_short = "????????"
+                    mode = "?"
+                    subj = "(no-subject)"
+                }
+                state = 1
+                next
+            }
+            state == 1 && /^by `/ { state = 2; next }   # skip the "by ... at ..." line
+            state == 2 {
+                if (length($0) == 0 || $0 ~ /^[[:space:]]*$/) next  # skip blank
+                if ($0 ~ /^_dismiss:/) { state = 0; next }          # end-of-block marker
+                preview = substr($0, 1, 110)
+                printf "  - [%s][%s] %s\n    %s\n", nid_short, mode, subj, preview
                 n += 1
                 if (n >= 5) exit
                 state = 0
