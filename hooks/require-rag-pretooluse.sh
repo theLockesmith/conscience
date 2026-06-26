@@ -33,7 +33,7 @@ TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
 
 # Free-pass tools (unchanged)
 case "$TOOL_NAME" in
-    mcp__rag__*) exit 0 ;;
+    mcp__rag__*|mcp__rag-empire__*) exit 0 ;;
     Read|Glob|Grep|TaskList|TaskGet|TaskUpdate|TaskCreate) exit 0 ;;
     "") exit 0 ;;
 esac
@@ -71,8 +71,16 @@ extract_tokens() {
             local bn="${fp##*/}"
             local par="${fp%/*}";   par="${par##*/}"
             local gpar="${fp%/*}"; gpar="${gpar%/*}"; gpar="${gpar##*/}"
-            [[ -n "$bn"  ]] && printf '%s\n' "$bn"
-            [[ -n "$par" && "$par" != "$bn" ]] && printf '%s\n' "$par"
+            # Normalize so dotfile/config paths are matchable: a leading dot
+            # makes `\b.claude\b` unsatisfiable (the word boundary sits before
+            # 'claude', not the dot), so strip it. Also emit the basename STEM
+            # (hooks.yaml -> hooks, auth.go -> auth) so a topical RAG result
+            # matches without the result needing the literal extension.
+            bn="${bn#.}"; par="${par#.}"; gpar="${gpar#.}"
+            local stem="${bn%.*}"
+            [[ -n "$bn"   ]] && printf '%s\n' "$bn"
+            [[ -n "$stem" && "$stem" != "$bn" ]] && printf '%s\n' "$stem"
+            [[ -n "$par"  && "$par"  != "$bn" ]] && printf '%s\n' "$par"
             [[ -n "$gpar" && "$gpar" != "$par" && "$gpar" != "$bn" ]] && printf '%s\n' "$gpar"
             ;;
         Task)

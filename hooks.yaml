@@ -81,12 +81,20 @@ hooks:
     # USER DIRECTIVE ENFORCEMENT - HARD BLOCK when user said "don't modify"
     # GITLAB CI REGISTRY - Blocks unnecessary registry config (GitLab handles it)
     # INTENT ENFORCEMENT - Blocks modifications when intent="conversation"
+    # Phase 11g: warn if a peer session has recent WIP on the same file
+    # (file-touch breadcrumbs). Advisory only -- never blocks the edit.
+    - matcher: "Edit|Write|MultiEdit|NotebookEdit"
+      commands:
+        - "$HOME/.claude/hooks/coord-wip-check.sh"
+      timeout: 5
     - matcher: "Edit|Write"
       commands:
         - "$HOME/.claude/hooks/enforce-intent.sh"
         - "$HOME/.claude/hooks/enforce-user-directives.sh"
         - "$HOME/.claude/hooks/block-shortcuts.sh"
-        - "$HOME/.claude/hooks/restrict-sensitive-paths.sh"
+        # restrict-sensitive-paths.sh dropped 2026-06-17: it blocked Edit/Write to
+        # protected paths but cp/mv (Bash) into them was a free pass, so the
+        # /tmp->cp escape defeated it entirely -- friction with no protection.
         - "$HOME/.claude/hooks/block-gitlab-registry-config.sh"
       timeout: 10
     # LEARNING CITATION VALIDATION - Requires verified sources for log_learning
@@ -115,6 +123,7 @@ hooks:
         - "$HOME/.claude/hooks/enforce-rag-before-giveup.sh"
         - "$HOME/.claude/hooks/enforce-question-answering.sh"
         - "$HOME/.claude/hooks/quality-enforcer.sh"
+        - "$HOME/.claude/hooks/gate-done-evidence.sh"
         - "$HOME/.claude/hooks/escalation-tracker.sh"
         - "$HOME/.claude/hooks/pre-completion-verification.sh"
         - "$HOME/.claude/hooks/workflow-checkpoint.sh"
@@ -156,6 +165,12 @@ hooks:
         - "$HOME/.claude/hooks/post-code-review.sh"
         - "$HOME/.claude/hooks/weekly-update-reminder.sh"
       timeout: 15
+    # Phase 11g: drop a file-touch breadcrumb so peer sessions can see
+    # this session is in flight on the file. Fail-silent; never blocks.
+    - matcher: "Edit|Write|MultiEdit|NotebookEdit"
+      commands:
+        - "$HOME/.claude/hooks/coord-wip-announce.sh"
+      timeout: 5
     - matcher: "Bash"
       commands:
         - "$HOME/.claude/hooks/sanitize-output.sh"
@@ -173,8 +188,11 @@ hooks:
       commands:
         - "$HOME/.claude/hooks/rag-usage-tracker.sh"
       timeout: 5
-    # Track ANY RAG call to clear post-compaction enforcement
-    - matcher: "mcp__rag__"
+    # Track ANY RAG call (default + empire surfaces) so require-rag's relevance
+    # check counts searches from Empire-context sessions too. mcp__rag.*__ also
+    # matches mcp__rag-empire__*. (Was mcp__rag__, which silently excluded
+    # Empire sessions -> they could never satisfy require-rag.)
+    - matcher: "mcp__rag.*__"
       commands:
         - "$HOME/.claude/hooks/rag-call-tracker.sh"
       timeout: 5
