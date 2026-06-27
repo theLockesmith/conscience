@@ -508,11 +508,16 @@ printf '{"ts":"%s","prompt_hash":"%s","prompt_snippet":"%s","classification":"%s
     "$CURRENT_MODEL" \
     "$CURRENT_PROVIDER" >> "$ROUTING_LOG"
 
-# Save current routing for Stop hook enforcement (now includes intent)
+# Save current routing for Stop hook enforcement (now includes intent).
+# The prompt_hash is the canonical routing_decision_id — agent-tracker
+# picks this up on Task PreToolUse and stamps it on the agent's invoke
+# event so we can later join routing_decisions to agent_metrics at the
+# decision level (closing the routing_compliance view gap documented
+# 2026-05-05 — time-window matching alone is insufficient).
 ROUTING_STATE_FILE="$HOME/.claude/session-state/current-routing.json"
 mkdir -p "$HOME/.claude/session-state"
-printf '{"classification":"%s","confidence":%s,"intent":"%s","intent_confidence":%s,"timestamp":"%s"}\n' \
-    "$CLASSIFICATION" "$CONFIDENCE" "$INTENT" "$INTENT_CONFIDENCE" "$(date -Iseconds)" > "$ROUTING_STATE_FILE"
+printf '{"classification":"%s","confidence":%s,"intent":"%s","intent_confidence":%s,"timestamp":"%s","prompt_hash":"%s","session_id":"%s","workflow_id":"%s"}\n' \
+    "$CLASSIFICATION" "$CONFIDENCE" "$INTENT" "$INTENT_CONFIDENCE" "$(date -Iseconds)" "$PROMPT_HASH" "$SESSION_ID" "$WORKFLOW_ID" > "$ROUTING_STATE_FILE"
 
 # Map to generic tier names (V12)
 GENERIC_TIER=$(tier_to_generic "$CLASSIFICATION")

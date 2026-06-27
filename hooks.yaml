@@ -144,6 +144,10 @@ hooks:
         - "$HOME/.claude/hooks/track-user-prompts.sh"
         - "$HOME/.claude/hooks/pane-status-update.sh"
         - "$HOME/.claude/hooks/model-router.sh"
+        # V18.1 P1: agent long-term memory write-path. Runs AFTER model-router so
+        # current-routing.json is fresh; the tracker reads prompt_hash from it
+        # to stamp the episode with routing_decision_id at boundary creation.
+        - "$HOME/.claude/hooks/episode-tracker.sh"
         - "$HOME/.claude/hooks/auto-project-context.sh"
         - "$HOME/.claude/hooks/rag-context-reminder.sh"
         - "$HOME/.claude/hooks/agent-triggers.sh"
