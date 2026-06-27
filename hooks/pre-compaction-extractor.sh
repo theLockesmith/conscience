@@ -4,7 +4,7 @@
 #
 # Unlike context-extractor.sh (Stop hook), this runs ONCE before compaction and:
 # 1. Creates a session checkpoint (todos, key files, context) for recovery
-# 2. Extracts decisions/learnings from the session transcript
+# 2. Extracts decisions/learnings from the session transcript via RAG MCP server
 #
 # The checkpoint enables restoring session state after compaction via restore_checkpoint MCP tool.
 
@@ -13,15 +13,17 @@ set -uo pipefail
 LOG_FILE="/tmp/pre-compaction-extractor.log"
 echo "[$(date -Iseconds)] PreCompact hook invoked" >> "$LOG_FILE"
 
-# Configuration - LocalAI for LLM, Ollama for embeddings
+# Configuration - LocalAI for LLM
 LOCALAI_URL="${LOCALAI_URL:-http://10.0.4.10:8000}"
 LOCALAI_MODEL="${LOCALAI_MODEL:-qwen2.5-coder-7b}"
-POSTGRES_HOST="${POSTGRES_HOST:-postgres-rw.db.aegis-hq.xyz}"
-POSTGRES_PORT="${POSTGRES_PORT:-5432}"
-POSTGRES_DB="${POSTGRES_DB:-ragdb}"
-POSTGRES_USER="${POSTGRES_USER:-rag}"
-# Password from environment or fallback (same as coord-session-register.sh)
-POSTGRES_PASSWORD="${POSTGRES_PASSWORD:?POSTGRES_PASSWORD env var required}"
+
+# Helper function to call RAG MCP server
+call_rag_mcp() {
+    local tool_name="$1"
+    local args="$2"
+    
+    python3 "$HOME/.claude/hooks/lib/rag-mcp-call.py" "$tool_name" "$args" 2>/dev/null || true
+}
 
 # Read input from stdin (PreCompact provides trigger and custom_instructions)
 INPUT=$(cat)
@@ -62,8 +64,15 @@ else
 fi
 
 # ============================================================================
-# PHASE 2: Extract Decisions and Learnings (existing logic)
+# PHASE 2: Extract Decisions and Learnings (background — detached)
 # ============================================================================
+# This phase was historically the dominant cost of PreCompact: a synchronous
+# LocalAI inference (qwen2.5-coder-7b, --max-time 120) followed by N MCP
+# writes. Wall time routinely hit the 120s PreCompact cap, blocking the
+# compaction the user is waiting on. The extraction is best-effort
+# enrichment — losing a turn of it is harmless. Detach the whole phase so
+# the hook returns as soon as Phase 1 (the checkpoint) is on disk.
+(
 
 # Extract assistant messages from transcript (last 50 to keep prompt manageable)
 # The transcript is JSONL format with message objects
@@ -176,64 +185,73 @@ if [[ "$DECISION_COUNT" == "0" ]] && [[ "$LEARNING_COUNT" == "0" ]]; then
     exit 0
 fi
 
-# Store decisions
+# Store decisions via RAG MCP
 if [[ "$DECISION_COUNT" != "0" ]]; then
-    SESSION_ID="precompact-$(date +%Y%m%d-%H%M%S)"
     echo "$JSON_CONTENT" | jq -c '.decisions[]' 2>/dev/null | while read -r decision; do
         summary=$(echo "$decision" | jq -r '.summary // empty')
         rationale=$(echo "$decision" | jq -r '.rationale // empty')
         project=$(echo "$decision" | jq -r '.project // empty')
-        # Convert JSON array to PostgreSQL array format
-        tags=$(echo "$decision" | jq -r '.tags // [] | "{" + (map("\"" + . + "\"") | join(",")) + "}"')
+        tags_array=$(echo "$decision" | jq -c '.tags // []')
 
         if [[ -n "$summary" ]]; then
-            SQL_RESULT=$(PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" \
-                -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "
-INSERT INTO decisions (summary, rationale, project, tags, session_id)
-VALUES (
-    '$(echo "$summary" | sed "s/'/''/g")',
-    '$(echo "$rationale" | sed "s/'/''/g")',
-    $(if [[ -n "$project" && "$project" != "null" ]]; then echo "'$project'"; else echo "NULL"; fi),
-    '${tags}'::text[],
-    '$SESSION_ID'
-)
-ON CONFLICT DO NOTHING;
-" 2>&1)
-            echo "[$(date -Iseconds)] Decision SQL result: $SQL_RESULT" >> "$LOG_FILE"
+            # Call log_decision via MCP
+            args=$(jq -n \
+                --arg summary "$summary" \
+                --arg rationale "$rationale" \
+                --arg project "$([[ -n "$project" && "$project" != "null" ]] && echo "$project" || echo "")" \
+                --argjson tags "$tags_array" \
+                '{
+                    summary: $summary,
+                    rationale: $rationale,
+                    project: (if $project == "" then null else $project end),
+                    tags: $tags
+                }')
+            
+            result=$(call_rag_mcp "log_decision" "$args")
+            echo "[$(date -Iseconds)] Decision logged: $summary -> $result" >> "$LOG_FILE"
         fi
     done
 fi
 
-# Store learnings
+# Store learnings via RAG MCP
 if [[ "$LEARNING_COUNT" != "0" ]]; then
-    SESSION_ID="precompact-$(date +%Y%m%d-%H%M%S)"
     echo "$JSON_CONTENT" | jq -c '.learnings[]' 2>/dev/null | while read -r learning; do
         content=$(echo "$learning" | jq -r '.content // empty')
         category=$(echo "$learning" | jq -r '.category // "insight"')
         lcontext=$(echo "$learning" | jq -r '.context // empty')
         project=$(echo "$learning" | jq -r '.project // empty')
-        # Convert JSON array to PostgreSQL array format
-        tags=$(echo "$learning" | jq -r '.tags // [] | "{" + (map("\"" + . + "\"") | join(",")) + "}"')
+        tags_array=$(echo "$learning" | jq -c '.tags // []')
 
         if [[ -n "$content" ]]; then
-            SQL_RESULT=$(PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" \
-                -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "
-INSERT INTO learnings (content, category, context, project, tags, source_session)
-VALUES (
-    '$(echo "$content" | sed "s/'/''/g")',
-    '$category',
-    '$(echo "$lcontext" | sed "s/'/''/g")',
-    $(if [[ -n "$project" && "$project" != "null" ]]; then echo "'$project'"; else echo "NULL"; fi),
-    '${tags}'::text[],
-    '$SESSION_ID'
-)
-ON CONFLICT DO NOTHING;
-" 2>&1)
-            echo "[$(date -Iseconds)] Learning SQL result: $SQL_RESULT" >> "$LOG_FILE"
+            # Call log_learning via MCP (requires source and source_excerpt)
+            source_excerpt="${content:0:200}"
+            args=$(jq -n \
+                --arg content "$content" \
+                --arg category "$category" \
+                --arg context "$lcontext" \
+                --arg project "$([[ -n "$project" && "$project" != "null" ]] && echo "$project" || echo "")" \
+                --argjson tags "$tags_array" \
+                --arg source "command:pre-compaction-extractor" \
+                --arg source_excerpt "$source_excerpt" \
+                '{
+                    content: $content,
+                    category: $category,
+                    context: $context,
+                    project: (if $project == "" then null else $project end),
+                    tags: $tags,
+                    source: $source,
+                    source_excerpt: $source_excerpt
+                }')
+            
+            result=$(call_rag_mcp "log_learning" "$args")
+            echo "[$(date -Iseconds)] Learning logged: $content -> $result" >> "$LOG_FILE"
         fi
     done
 fi
 
 echo "[$(date -Iseconds)] PreCompact extracted: $DECISION_COUNT decisions, $LEARNING_COUNT learnings" >> "$LOG_FILE"
 
+) >> "$LOG_FILE" 2>&1 < /dev/null &
+disown
+echo "[$(date -Iseconds)] Phase 2 (LLM extraction) detached as PID $!" >> "$LOG_FILE"
 exit 0

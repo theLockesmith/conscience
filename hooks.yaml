@@ -214,6 +214,7 @@ hooks:
         - "$HOME/.claude/hooks/enforce-claude-md-reading.sh"
         - "$HOME/.claude/hooks/weekly-update-init.sh"
         - "$HOME/.claude/hooks/coord-session-register.sh"
+        - "$HOME/.claude/hooks/llm-usage-logger.sh"
       timeout: 30
     - matcher: "compact"
       commands:
@@ -224,12 +225,14 @@ hooks:
         - "$HOME/.claude/hooks/post-compaction-reminder.sh"
         - "$HOME/.claude/hooks/weekly-update-init.sh"
         - "$HOME/.claude/hooks/coord-session-register.sh"
+        - "$HOME/.claude/hooks/llm-usage-logger.sh"
       timeout: 30
     - matcher: "resume"
       commands:
         - "$HOME/.claude/hooks/session-health-check.sh"
         - "$HOME/.claude/hooks/session-memory-loader.sh"
         - "$HOME/.claude/hooks/coord-session-register.sh"
+        - "$HOME/.claude/hooks/llm-usage-logger.sh"
       timeout: 30
 # Settings
 settings:

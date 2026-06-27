@@ -29,8 +29,12 @@ set -uo pipefail
 
 ROUTING_LOG="$HOME/.claude/routing-decisions.jsonl"
 WORKFLOW_STATE_DIR="$HOME/.claude/workflow-state"
-GRAPHQL_URL="${RAG_GRAPHQL_URL:-http://127.0.0.1:8765/graphql}"
-TIMEOUT=8  # Timeout for classification (vLLM cold start ~5-6s)
+# Per-call deadline for the MCP classify_prompt round-trip. 41% of routing
+# decisions historically defaulted because the legacy local GraphQL endpoint
+# (127.0.0.1:8765) wasn't listening; we now go through the surface-aware
+# rag-mcp tool. Keep the deadline well under the hook cap so the regex
+# fallback fires fast when the classifier is cold.
+TIMEOUT=3
 
 # Read input
 INPUT=$(cat)
@@ -410,65 +414,58 @@ classify_with_regex() {
     fi
 }
 
-# vLLM classification via GraphQL
-classify_with_vllm() {
+# Classification via the surface-aware rag-mcp classify_prompt tool. This
+# replaces the legacy local GraphQL path (which silently went dark and made
+# every prompt fall through to regex). Returns "tier|confidence|reasoning
+# (via method)" on success, non-zero on failure; the caller falls back to
+# regex on non-zero.
+classify_with_mcp() {
     local prompt="$1"
 
-    # Escape special characters for JSON (printf avoids trailing newline)
-    local escaped_prompt
-    escaped_prompt=$(printf '%s' "$prompt" | head -c 2000 | jq -Rs '.')
+    local mc="$HOME/.claude/hooks/lib/mcp-call.sh"
+    [[ -x "$mc" ]] || return 1
 
-    # Build JSON payload with proper escaping
-    local json_payload
-    json_payload=$(jq -n --arg p "$prompt" '{
-        query: "{ classifyPrompt(prompt: \($p | @json), useVllm: true) { tier confidence reasoning method latencyMs }}"
-    }')
+    # Resolve the right rag-mcp surface for this cwd (Coldforge vs Empire).
+    # surface-resolve.sh sets _SURFACE/MCP_URL/TOKEN_FILE from cwd.
+    [[ -f "$HOME/.claude/hooks/lib/surface-resolve.sh" ]] || return 1
+    # shellcheck source=lib/surface-resolve.sh
+    . "$HOME/.claude/hooks/lib/surface-resolve.sh" 2>/dev/null || return 1
+    local resolved
+    resolved=$(sr_resolve "${PWD:-$HOME}" 2>/dev/null) || return 1
+    local _surface _company _server mcp_url token_file
+    IFS='|' read -r _surface _company _server mcp_url token_file <<< "$resolved"
+    [[ -n "$mcp_url" && -n "$token_file" ]] || return 1
 
-    # Make the request with a timeout
+    local args
+    args=$(jq -nc --arg p "$prompt" '{prompt:$p}') || return 1
+
     local response
-    response=$(curl -s --max-time "$TIMEOUT" \
-        -H "Content-Type: application/json" \
-        -d "$json_payload" \
-        "$GRAPHQL_URL" 2>/dev/null)
+    response=$(timeout "$TIMEOUT" "$mc" "$mcp_url" "$token_file" classify_prompt "$args" 2>/dev/null) || return 1
+    [[ -n "$response" ]] || return 1
 
-    if [[ -z "$response" ]]; then
-        return 1
-    fi
-
-    # Check for errors
-    local errors
-    errors=$(echo "$response" | jq -r '.errors[0].message // empty' 2>/dev/null)
-    if [[ -n "$errors" ]]; then
-        return 1
-    fi
-
-    # Extract result
+    # Response is markdown with **Tier:** / **Confidence:** / **Reasoning:**
+    # / **Method:** fields. Extract by line prefix.
     local tier confidence reasoning method
-    tier=$(echo "$response" | jq -r '.data.classifyPrompt.tier // empty' 2>/dev/null)
-    confidence=$(echo "$response" | jq -r '.data.classifyPrompt.confidence // empty' 2>/dev/null)
-    reasoning=$(echo "$response" | jq -r '.data.classifyPrompt.reasoning // empty' 2>/dev/null)
-    method=$(echo "$response" | jq -r '.data.classifyPrompt.method // empty' 2>/dev/null)
+    tier=$(awk -F'\\*\\*Tier:\\*\\*' '/Tier:/{gsub(/^[[:space:]]+/,"",$2); print $2; exit}' <<<"$response")
+    confidence=$(awk -F'\\*\\*Confidence:\\*\\*' '/Confidence:/{gsub(/^[[:space:]]+/,"",$2); print $2; exit}' <<<"$response")
+    reasoning=$(awk -F'\\*\\*Reasoning:\\*\\*' '/Reasoning:/{gsub(/^[[:space:]]+/,"",$2); print $2; exit}' <<<"$response")
+    method=$(awk -F'\\*\\*Method:\\*\\*' '/Method:/{gsub(/^[[:space:]]+/,"",$2); print $2; exit}' <<<"$response")
 
     if [[ -n "$tier" && -n "$confidence" ]]; then
         echo "$tier|$confidence|$reasoning (via $method)"
         return 0
     fi
-
     return 1
 }
 
-# Try vLLM first, fall back to regex
+# Try the MCP classifier first, fall back to regex.
 classify_prompt() {
     local prompt="$1"
-
-    # Try vLLM classification via GraphQL
     local result
-    if result=$(classify_with_vllm "$prompt"); then
+    if result=$(classify_with_mcp "$prompt"); then
         echo "$result"
         return
     fi
-
-    # Fall back to regex classification
     classify_with_regex "$prompt"
 }
 

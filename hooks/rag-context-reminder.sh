@@ -58,31 +58,43 @@ if [[ -n "$CWD" ]]; then
 fi
 
 # ============================================================================
-# 1. PROMPT-MATCHED RECALL - search decisions + learnings BY the user's actual
-#    prompt and inject the relevant hits, so prior context is in front of the
-#    model BEFORE it answers (no "go search" reminder it can ignore).
-#    Was: a fixed query:"critical gotcha" that injected the same auto-logged
-#    quality-enforcer metrics every turn regardless of what was asked.
+# Parallel RAG fan-out: previously called search_decisions, search_learnings,
+# and get_session_context SEQUENTIALLY, which on cold MCP/embedding paths
+# wall-clocked at the 10s hook cap on ~48% of prompts. Run them concurrently
+# with a per-call deadline so the worst case is max(individual) ≈ 2-3s.
+# Each preserved guard (QUERY length, PROJECT presence) gates whether the
+# corresponding call fires at all.
 # ============================================================================
 
-# The prompt itself is the semantic query (embedding search handles phrasing).
 QUERY=$(printf '%s' "$USER_PROMPT" | tr '\n' ' ' | head -c 600)
+RCR_TMP=$(mktemp -d -t rcr.XXXXXX) || exit 0
+trap 'rm -rf "$RCR_TMP"' EXIT
 
-REL_DECISIONS=""
-REL_LEARNINGS=""
 if [[ "${#QUERY}" -ge 8 ]]; then
-    REL_DECISIONS=$(call_rag_mcp "search_decisions" "$(jq -n --arg q "$QUERY" '{query:$q, num_results:3}')")
-    REL_LEARNINGS=$(call_rag_mcp "search_learnings"  "$(jq -n --arg q "$QUERY" '{query:$q, num_results:4}')")
-    # Drop auto-logged telemetry "learnings" (quality-enforcer block counts,
-    # auto-syncs) -- synced metrics, not knowledge. Filter whole entries.
-    if [[ -n "$REL_LEARNINGS" ]]; then
-        REL_LEARNINGS=$(printf '%s' "$REL_LEARNINGS" | python3 -c '
+    DEC_ARGS=$(jq -n --arg q "$QUERY" '{query:$q, num_results:3}')
+    LRN_ARGS=$(jq -n --arg q "$QUERY" '{query:$q, num_results:4}')
+    ( timeout 3 python3 "$HOME/.claude/hooks/lib/rag-mcp-call.py" "search_decisions" "$DEC_ARGS" > "$RCR_TMP/dec" 2>/dev/null ) &
+    ( timeout 3 python3 "$HOME/.claude/hooks/lib/rag-mcp-call.py" "search_learnings" "$LRN_ARGS" > "$RCR_TMP/lrn" 2>/dev/null ) &
+fi
+if [[ -n "$PROJECT" ]]; then
+    CTX_ARGS=$(jq -n --arg project "$PROJECT" '{ project: $project }')
+    ( timeout 3 python3 "$HOME/.claude/hooks/lib/rag-mcp-call.py" "get_session_context" "$CTX_ARGS" > "$RCR_TMP/ctx" 2>/dev/null ) &
+fi
+wait
+
+REL_DECISIONS=$(cat "$RCR_TMP/dec" 2>/dev/null) || REL_DECISIONS=""
+REL_LEARNINGS=$(cat "$RCR_TMP/lrn" 2>/dev/null) || REL_LEARNINGS=""
+SESSION_CONTEXT=$(cat "$RCR_TMP/ctx" 2>/dev/null) || SESSION_CONTEXT=""
+
+# Drop auto-logged telemetry "learnings" (quality-enforcer block counts,
+# auto-syncs) -- synced metrics, not knowledge. Filter whole entries.
+if [[ -n "$REL_LEARNINGS" ]]; then
+    REL_LEARNINGS=$(printf '%s' "$REL_LEARNINGS" | python3 -c '
 import sys
 parts = sys.stdin.read().split("\n---\n")
 junk = ("Quality enforcer blocked", "auto-logged", "Auto-synced from")
 sys.stdout.write("\n---\n".join(p for p in parts if not any(j in p for j in junk)))
 ' 2>/dev/null || printf '%s' "$REL_LEARNINGS")
-    fi
 fi
 
 if [[ -n "${REL_DECISIONS}${REL_LEARNINGS}" ]]; then
@@ -94,21 +106,12 @@ if [[ -n "${REL_DECISIONS}${REL_LEARNINGS}" ]]; then
     echo "</relevant-prior-context>"
 fi
 
-# ============================================================================
-# 2 & 3. RECENT CONTEXT - Use get_session_context for recent learnings/decisions
-# ============================================================================
-if [[ -n "$PROJECT" ]]; then
-    SESSION_CONTEXT_ARGS=$(jq -n --arg project "$PROJECT" '{ project: $project }')
-    SESSION_CONTEXT=$(call_rag_mcp "get_session_context" "$SESSION_CONTEXT_ARGS")
-    
-    if [[ -n "$SESSION_CONTEXT" && "$SESSION_CONTEXT" != "" ]]; then
-        # Extract just the recent sections if they exist
-        if echo "$SESSION_CONTEXT" | grep -q "Recent Decisions\|Recent Learnings"; then
-            echo "<recent-context project=\"$PROJECT\">"
-            echo "**Recent context (auto-loaded from RAG):**"
-            echo "$SESSION_CONTEXT" | sed -n '/## Recent Decisions/,/## /p; /## Recent Learnings/,/## /p' | sed '$d'
-            echo "</recent-context>"
-        fi
+if [[ -n "$PROJECT" && -n "$SESSION_CONTEXT" ]]; then
+    if echo "$SESSION_CONTEXT" | grep -q "Recent Decisions\|Recent Learnings"; then
+        echo "<recent-context project=\"$PROJECT\">"
+        echo "**Recent context (auto-loaded from RAG):**"
+        echo "$SESSION_CONTEXT" | sed -n '/## Recent Decisions/,/## /p; /## Recent Learnings/,/## /p' | sed '$d'
+        echo "</recent-context>"
     fi
 fi
 
