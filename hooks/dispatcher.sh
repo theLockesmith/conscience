@@ -92,7 +92,18 @@ run_hook() {
     local input_file=$(mktemp)
     echo "$INPUT" > "$input_file"
     local cmd_expanded="${cmd//\$HOME/$HOME}"
-    timeout "$timeout" "$cmd_expanded" < "$input_file" >"$stdout_file" 2>"$stderr_file"
+    # 2026-06-29: invoke via `bash -c` so multi-word commands work. The
+    # previous form `timeout "$timeout" "$cmd_expanded"` passed the whole
+    # quoted string as a single argv[0] to timeout, which tried to
+    # execute "/path/to/run-hook coord_stream_inject" as one filename
+    # and failed with "No such file or directory". Single-word commands
+    # (the original conscience .sh scripts) worked; the kit's hook
+    # entries (`/path/to/run-hook <hook_name>` — two words) ALL silently
+    # failed. `bash -c "$cmd_expanded"` lets the shell parse the string
+    # exactly as a user would type it. Safe under shellcheck because
+    # the commands originate from hooks.yaml (operator-controlled), not
+    # from the tool-call payload.
+    timeout "$timeout" bash -c "$cmd_expanded" < "$input_file" >"$stdout_file" 2>"$stderr_file"
     HOOK_EXIT_CODE=$?
     rm -f "$input_file"
     HOOK_RESULT=$(cat "$stdout_file")
