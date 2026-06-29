@@ -181,6 +181,41 @@ verify_action_mentions_any_token     && exit 0
          "tokens=$(echo "$TOKENS" | tr '\n' ',' | sed 's/,$//') tool=$TOOL_NAME turn=${CURRENT_TURN:-unknown}"
 } >> "$HOME/.claude/rag-enforcement.log"
 
+# 2026-06-29: emit the block on STDOUT as a Claude Code decision envelope
+# so the MODEL sees the actionable guidance — not just the dispatcher.log.
+# Pre-fix this output went to stderr, which Claude Code does NOT surface
+# to the model; the model just saw a bare exit-2 and had no idea what to
+# do. Operator's other session was hitting persistent edit-blocks with
+# no notification of how to satisfy the gate. The stderr ASCII-box stays
+# duplicated below for human/log readability.
+#
+# Tokens are comma-joined onto a single line for the JSON-safe reason
+# string; the multi-line stderr form below keeps the original formatting
+# for `journalctl --user -u …` / `tail -f dispatcher.log` readers.
+_TOKENS_FLAT=$(echo "$TOKENS" | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')
+_REASON="BLOCKED: ${TOOL_NAME} on a target nothing this turn has RAG-loaded.
+
+Tokens extracted from the tool input: ${_TOKENS_FLAT}
+
+To proceed, satisfy the gate with ONE of:
+  • mcp__rag__search_docs / search_learnings / search_decisions whose RESULTS contain content mentioning one of the tokens above.
+  • mcp__rag__verify_action(intent=\"<what you're doing>\", targets=[\"<entry>\"]) for a target whose value matches one of the tokens.
+
+The token must appear in RAG RESULTS, not just the query. A search whose results don't return content naming the token doesn't satisfy the gate.
+
+Bypass for the rest of the session: export DISABLE_RAG_PRETOOLUSE=1 (operator-side only)."
+
+# Emit JSON to stdout — Claude Code reads this and surfaces the reason
+# to the model, so it actually knows what to do.
+python3 -c "
+import json, sys
+print(json.dumps({
+    'decision': 'block',
+    'reason': sys.argv[1],
+}))
+" "$_REASON"
+
+# Also write the human-readable box-art to stderr for logs/journalctl.
 cat <<EOF >&2
 ╔═══════════════════════════════════════════════════════════════════════════════╗
 ║ BLOCKED: ${TOOL_NAME} on a target nothing this turn has RAG-loaded             ║
