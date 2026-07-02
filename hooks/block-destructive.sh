@@ -289,13 +289,33 @@ if echo "$COMMAND_BEFORE_HEREDOC" | grep -qE '\bgit[[:space:]]+rm\b'; then
     exit 2
 fi
 
-# Block --force but allow --force-with-lease (safer alternative)
-if echo "$CMD_FOR_REGEX" | grep -qE '\-\-force($|\s)' && ! echo "$COMMAND" | grep -q '\-\-force-with-lease'; then
-    echo "BLOCKED: --force flag detected. Use --force-with-lease, or get explicit user approval." >&2
+# --force is dangerous ONLY in specific combinations. The prior blanket
+# catch (2026-05-12) blocked legitimate ops: `oc adm drain --force` (bare-
+# pod eviction during node maintenance is REQUIRED), `docker rm --force`
+# (kill running container — low stakes), `mv --force` / `cp --force` (file
+# overwrite, low stakes). Narrowed 2026-07-02 to catch only combinations
+# that cause silent data loss or force-push shared refs.
+DANGEROUS_FORCE=''
+# git push --force (long) — force-push to shared refs
+DANGEROUS_FORCE+='\bgit\s+push\s+.*--force\b'
+# kubectl/oc delete with --force + --grace-period=0 — bypasses termination,
+# leaves orphaned CephFS/RBD mounts and half-torn resources. Both arg orders.
+DANGEROUS_FORCE+='|\bkubectl\s+.*\bdelete\b.*--force\b.*--grace-period[= ]?0'
+DANGEROUS_FORCE+='|\bkubectl\s+.*\bdelete\b.*--grace-period[= ]?0.*--force\b'
+DANGEROUS_FORCE+='|\boc(-[a-z0-9-]+)?\s+.*\bdelete\b.*--force\b.*--grace-period[= ]?0'
+DANGEROUS_FORCE+='|\boc(-[a-z0-9-]+)?\s+.*\bdelete\b.*--grace-period[= ]?0.*--force\b'
+# git worktree remove --force (also caught by GIT_DESTRUCTIVE above)
+DANGEROUS_FORCE+='|\bgit\s+worktree\s+remove\s+.*--force\b'
+# rm --force (long form) — the short -f is already in rm -rf catches
+DANGEROUS_FORCE+='|\brm\s+.*--force\b'
+if echo "$CMD_FOR_REGEX" | grep -qE "$DANGEROUS_FORCE" && ! echo "$COMMAND" | grep -q '\-\-force-with-lease'; then
+    echo "BLOCKED: dangerous --force combination. Options: use --force-with-lease for git push, drop --grace-period=0 for delete, or get explicit user approval." >&2
     exit 2
 fi
 
-# Block git push -f (short form) but allow if --force-with-lease is also present
+# Block git push -f (short form) but allow if --force-with-lease is also present.
+# Same load-bearing rule as before — force-pushing to shared refs is the
+# top-cited disaster.
 if echo "$CMD_FOR_REGEX" | grep -qE 'git\s+push\s+.*-f($|\s)' && ! echo "$COMMAND" | grep -q '\-\-force-with-lease'; then
     echo "BLOCKED: git push -f (force push). Use --force-with-lease, or get explicit user approval." >&2
     exit 2
