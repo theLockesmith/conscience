@@ -19,14 +19,16 @@
 #   - Bash                   (Phase 3/4 hooks gate the dangerous shapes)
 #   - Edit/Write/NotebookEdit into scratch paths (/tmp, ~/.cache, scratch/)
 #
-# Bypass: DISABLE_RAG_PRETOOLUSE=1
+# NO env-var escape valve. Prior versions accepted DISABLE_RAG_PRETOOLUSE=1
+# as a bypass; removed 2026-07-03 per operator direction. Same rationale
+# as kit-side ARBITER_OK_TO_DESTROY removal: env valves degrade into
+# model-reflex bypass patterns. Legitimate authorization flows through
+# mcp__rag__verify_action(intent, targets) OR one of the free-pass tools.
 
 set -uo pipefail
 
 STATE_DIR="$HOME/.claude/session-state"
 mkdir -p "$STATE_DIR"
-
-[[ "${DISABLE_RAG_PRETOOLUSE:-}" == "1" ]] && exit 0
 
 INPUT=$(cat)
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
@@ -201,9 +203,7 @@ To proceed, satisfy the gate with ONE of:
   • mcp__rag__search_docs / search_learnings / search_decisions whose RESULTS contain content mentioning one of the tokens above.
   • mcp__rag__verify_action(intent=\"<what you're doing>\", targets=[\"<entry>\"]) for a target whose value matches one of the tokens.
 
-The token must appear in RAG RESULTS, not just the query. A search whose results don't return content naming the token doesn't satisfy the gate.
-
-Bypass for the rest of the session: export DISABLE_RAG_PRETOOLUSE=1 (operator-side only)."
+The token must appear in RAG RESULTS, not just the query. A search whose results don't return content naming the token doesn't satisfy the gate."
 
 # Emit JSON to stdout — Claude Code reads this and surfaces the reason
 # to the model, so it actually knows what to do.
@@ -231,8 +231,6 @@ cat <<EOF >&2
 ║ The token must appear in RAG RESULTS, not just the query. Searching
 ║ "what is the rag-mcp deploy" without getting back content that names
 ║ rag-mcp is not enough.
-║
-║ Bypass: export DISABLE_RAG_PRETOOLUSE=1
 ╚═══════════════════════════════════════════════════════════════════════════════╝
 EOF
 exit 2
