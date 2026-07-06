@@ -1,10 +1,23 @@
 #!/bin/bash
-# Session Health Check - Verifies RAG, MCP, and Tribunal connectivity
+# Session Health Check - Verifies RAG (via MCP), MCP, Ollama, Tribunal
 # Location: ~/.claude/hooks/session-health-check.sh
 # Hook: SessionStart
 #
 # Outputs a status banner showing connection health.
-# User is informed whether systems are connected or not.
+#
+# HISTORICAL NOTE (2026-07-06): pre-V16, this checked Postgres TCP
+# directly at postgres-rw.db.aegis-hq.xyz:5432 — but post-V16 the
+# workstation NEVER connects to Postgres directly (per surfaces.yaml:
+# "The client speaks only MCP-over-HTTPS"). The old direct-PG probe
+# was a false negative that fired whenever the aegis-hq edge was
+# flaky, even though MCP-mediated RAG kept working.
+#
+# Post-2026-07-06:
+#   - "RAG (via MCP)" probes the rag-mcp HTTP /health endpoint —
+#     which is the path all RAG traffic actually takes
+#   - "MCP Server" checks .claude.json wiring (stdio or http shape)
+#   - Postgres endpoint variables retained ONLY for legacy overrides;
+#     no longer used by the health check itself
 
 set -uo pipefail
 
@@ -18,20 +31,15 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Configuration
-POSTGRES_HOST="${POSTGRES_HOST:-postgres-rw.db.aegis-hq.xyz}"
-POSTGRES_PORT="${POSTGRES_PORT:-5432}"
-POSTGRES_USER="${POSTGRES_USER:-raguser}"
-POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
-POSTGRES_DB="${POSTGRES_DB:-ragdb}"
 OLLAMA_URL="${OLLAMA_URL:-http://10.0.4.10:11434}"
 SYSTEM_PROMPT_FILE="$HOME/.claude/system-prompt.md"
+CLAUDE_JSON="$HOME/.claude.json"
 
 # Status tracking
 RAG_STATUS="UNKNOWN"
 OLLAMA_STATUS="UNKNOWN"
 TRIBUNAL_STATUS="UNKNOWN"
 MCP_STATUS="UNKNOWN"
-MCP_DOC_COUNT=""
 
 # Colors for terminal (will show in logs)
 RED='\033[0;31m'
@@ -39,17 +47,39 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# Test PostgreSQL (RAG database)
-test_postgres() {
-    if command -v pg_isready &>/dev/null; then
-        if pg_isready -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -t 3 &>/dev/null; then
-            RAG_STATUS="CONNECTED"
-            return 0
-        fi
+# Test RAG via MCP — probes the rag-mcp /health HTTP endpoint. This is
+# the actual data-plane path (workstation → MCP over HTTPS → server-
+# side DB). Returns CONNECTED on HTTP 200, DISCONNECTED otherwise.
+#
+# Skips silently when the mcp URL isn't extractable (stdio proxy or
+# missing rag entry) — MCP_STATUS handles wiring detection instead.
+test_rag_via_mcp() {
+    local mcp_url=""
+    if [[ -f "$CLAUDE_JSON" ]]; then
+        mcp_url=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$CLAUDE_JSON'))
+    url = d.get('mcpServers', {}).get('rag', {}).get('url', '')
+    if url.endswith('/mcp'):
+        print(url[:-4] + '/health')
+    elif url:
+        print(url + '/health')
+except Exception:
+    pass
+" 2>/dev/null)
     fi
 
-    # Fallback: test TCP connection
-    if timeout 3 bash -c "echo >/dev/tcp/$POSTGRES_HOST/$POSTGRES_PORT" 2>/dev/null; then
+    # No URL — could be the stdio proxy shape (mcpServers.rag.command)
+    # or no rag entry at all. Either way, the direct HTTP health probe
+    # doesn't apply; degrade to UNKNOWN and let MCP_STATUS carry the
+    # signal. Not a false negative.
+    if [[ -z "$mcp_url" ]]; then
+        RAG_STATUS="N/A"
+        return 0
+    fi
+
+    if curl -sf --max-time 3 -o /dev/null "$mcp_url" 2>/dev/null; then
         RAG_STATUS="CONNECTED"
         return 0
     fi
@@ -87,38 +117,55 @@ test_tribunal() {
     return 1
 }
 
-# Test MCP server - verify it's actually functional by querying the RAG database
+# Test MCP wiring — inspect ~/.claude.json for a well-formed rag
+# entry. Two shapes are valid:
+#   HTTP:  { url, headers.Authorization }
+#   stdio: { command, args } — arbiter mcp-proxy or similar
+#
+# Post-V13 the MCP server runs in the atlantis cluster; there's no
+# local supervisor.py to look for. The old pgrep + local-supervisor
+# check was inherited from pre-V13 and produced NOT CONFIGURED even
+# though MCP was perfectly fine.
 test_mcp() {
-    # Check if MCP RAG server is configured
-    if [[ ! -f "$HOME/claude/personal/localhost/mcp/rag-server/supervisor.py" ]]; then
+    if [[ ! -f "$CLAUDE_JSON" ]]; then
         MCP_STATUS="NOT CONFIGURED"
         return 1
     fi
 
-    # Check if process is running
-    if ! pgrep -f "supervisor.py" &>/dev/null && ! pgrep -f "rag-server" &>/dev/null; then
-        MCP_STATUS="NOT RUNNING"
-        return 1
-    fi
+    local shape
+    shape=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$CLAUDE_JSON'))
+    entry = d.get('mcpServers', {}).get('rag', {})
+    if not entry:
+        print('MISSING')
+    elif 'url' in entry and entry['url']:
+        print('HTTP')
+    elif 'command' in entry and entry['command']:
+        print('STDIO')
+    else:
+        print('MALFORMED')
+except Exception:
+    print('MISSING')
+" 2>/dev/null)
 
-    # Actually test MCP functionality by querying the database directly
-    # This verifies the full chain: MCP server -> PostgreSQL -> response
-    local test_query
-    test_query=$(PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c "SELECT COUNT(*) FROM documents LIMIT 1;" 2>/dev/null | tr -d ' ')
-
-    if [[ -n "$test_query" && "$test_query" =~ ^[0-9]+$ ]]; then
-        MCP_STATUS="VERIFIED"
-        MCP_DOC_COUNT="$test_query"
-        return 0
-    fi
-
-    # Fallback: process running but can't verify DB
-    MCP_STATUS="RUNNING"
-    return 0
+    case "$shape" in
+        HTTP)  MCP_STATUS="CONFIGURED"; return 0 ;;
+        STDIO) MCP_STATUS="CONFIGURED"; return 0 ;;
+        MALFORMED)
+            MCP_STATUS="MALFORMED"
+            return 1
+            ;;
+        *)
+            MCP_STATUS="NOT CONFIGURED"
+            return 1
+            ;;
+    esac
 }
 
 # Run all checks
-test_postgres
+test_rag_via_mcp
 test_ollama
 test_tribunal
 test_mcp
@@ -128,7 +175,9 @@ test_mcp
 HEALTHY=0
 UNHEALTHY=0
 
-if [[ "$RAG_STATUS" == "CONNECTED" ]]; then ((++HEALTHY)); else ((++UNHEALTHY)); fi
+# "N/A" (stdio proxy — no HTTP health endpoint to probe) is not a
+# failure; MCP_STATUS carries the wiring signal in that case.
+if [[ "$RAG_STATUS" =~ ^(CONNECTED|N/A)$ ]]; then ((++HEALTHY)); else ((++UNHEALTHY)); fi
 if [[ "$OLLAMA_STATUS" == "CONNECTED" ]]; then ((++HEALTHY)); else ((++UNHEALTHY)); fi
 if [[ "$TRIBUNAL_STATUS" =~ ^(ACTIVE|CONFIGURED)$ ]]; then ((++HEALTHY)); else ((++UNHEALTHY)); fi
 if [[ "$MCP_STATUS" =~ ^(CONFIGURED|RUNNING|VERIFIED)$ ]]; then ((++HEALTHY)); else ((++UNHEALTHY)); fi
@@ -149,7 +198,7 @@ generate_banner() {
 ╔══════════════════════════════════════════════════════════════╗
 ║                    SESSION HEALTH CHECK                       ║
 ╠══════════════════════════════════════════════════════════════╣
-║  RAG Database:    $(printf "%-12s" "$RAG_STATUS") $(status_icon "$RAG_STATUS")                          ║
+║  RAG (via MCP):   $(printf "%-12s" "$RAG_STATUS") $(status_icon "$RAG_STATUS")                          ║
 ║  Ollama:          $(printf "%-12s" "$OLLAMA_STATUS") $(status_icon "$OLLAMA_STATUS")                          ║
 ║  Tribunal:        $(printf "%-12s" "$TRIBUNAL_STATUS") $(status_icon "$TRIBUNAL_STATUS")                          ║
 ║  MCP Server:      $(printf "%-12s" "$MCP_STATUS") $(status_icon "$MCP_STATUS")                          ║
@@ -160,9 +209,11 @@ EOF
 
     # Add warnings for any disconnected systems
     if [[ "$RAG_STATUS" == "DISCONNECTED" ]]; then
-        echo "WARNING: RAG database unreachable at $POSTGRES_HOST:$POSTGRES_PORT"
-        echo "  - Memory tools (log_decision, log_learning) will FAIL"
-        echo "  - Check: oc-atlantis get pods -n postgresql"
+        echo "WARNING: RAG /health endpoint unreachable"
+        echo "  - Memory tools (log_decision, log_learning) may FAIL"
+        echo "  - Check: curl -sf https://rag-mcp.aegis-hq.xyz/health"
+        echo "  - If /health is 200 but the banner still shows DISCONNECTED,"
+        echo "    the check ran during a transient — retry a new session"
     fi
 
     if [[ "$OLLAMA_STATUS" == "DISCONNECTED" ]]; then
@@ -177,10 +228,10 @@ EOF
         echo "  - Check: ~/.claude/system-prompt.md exists"
     fi
 
-    if [[ "$MCP_STATUS" == "NOT CONFIGURED" ]]; then
-        echo "WARNING: MCP RAG server not configured"
+    if [[ "$MCP_STATUS" == "NOT CONFIGURED" ]] || [[ "$MCP_STATUS" == "MALFORMED" ]]; then
+        echo "WARNING: MCP rag entry missing or malformed in ~/.claude.json"
         echo "  - RAG tools will not be available"
-        echo "  - Check: ~/arbiter/personal/localhost/mcp/rag-server/"
+        echo "  - Check: arbiter doctor  (or re-run arbiter install)"
     fi
 
     echo "</system-reminder>"
